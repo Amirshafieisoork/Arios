@@ -1,6 +1,6 @@
 {
   "name": "arios-os",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Independent Persian ARIOS project operations and customer portal",
@@ -12,6 +12,13 @@
     "demo": "ARIOS_DEMO=1 node --env-file-if-exists=.env server.mjs",
     "test": "node --test --test-isolation=none tests/*.test.mjs",
     "build:preview": "node scripts/build-preview.mjs",
-    "package:source": "node scripts/package-source.mjs"
+    "package:source": "node scripts/package-source.mjs",
+    "db:generate": "drizzle-kit generate",
+    "build": "node scripts/build-hosted.mjs"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.11",
+    "drizzle-orm": "^0.45.4",
+    "esbuild": "^0.28.2"
   }
 }

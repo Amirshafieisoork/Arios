@@ -18,7 +18,7 @@ import zipfile
 
 root = pathlib.Path(sys.argv[1])
 destination = pathlib.Path(sys.argv[2])
-roots = ["public", "server.mjs", "tests", "scripts", "package.json", "package-lock.json", ".env.example", ".gitignore", "README_FA.md", "CONTRACT.md"]
+roots = ["public", "worker", "db", "drizzle", "drizzle.config.ts", "server.mjs", "tests", "scripts", "package.json", "package-lock.json", ".env.example", ".gitignore", "README_FA.md", "CONTRACT.md"]
 blocked = {".git", ".openai", ".data", ".aws", "node_modules", "secrets", "dist", "downloads", "deliverables", "__pycache__"}
 archive_suffixes = (".zip", ".tar", ".gz", ".tgz", ".7z", ".rar")
 secret_suffixes = (".db", ".sqlite", ".sqlite3", ".db-wal", ".db-shm", ".sqlite-wal", ".sqlite-shm", ".sqlite3-wal", ".sqlite3-shm", ".pem", ".key", ".pyc")

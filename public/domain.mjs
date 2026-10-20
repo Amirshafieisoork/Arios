@@ -24,8 +24,8 @@ function integer(value, label, min = 0, max = Number.MAX_SAFE_INTEGER) {
   if (!Number.isSafeInteger(value) || value < min || value > max) fail(`${label} باید عدد صحیح معتبر باشد.`);
   return value;
 }
-function quantity(value, label = 'مقدار') {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || !Number.isSafeInteger(Math.round(value * 1000)) || Math.abs(value * 1000 - Math.round(value * 1000)) > 0.000001) fail(`${label} باید مثبت و حداکثر سه رقم اعشار باشد.`);
+function quantity(value, label = 'مقدار', allowZero = false) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || (!allowZero && value === 0) || !Number.isSafeInteger(Math.round(value * 1000)) || Math.abs(value * 1000 - Math.round(value * 1000)) > 0.000001) fail(`${label} باید ${allowZero ? 'نامنفی' : 'مثبت'} و حداکثر سه رقم اعشار باشد.`);
   return value;
 }
 function isoDate(value, label = 'تاریخ') {
@@ -176,6 +176,17 @@ export function applyAction(state, userId, action, payload = {}) {
   } else if (action === 'project.update') {
     manager(user);
     const project = find(draft.projects, payload.id, 'پروژه');
+    if (payload.customerId !== undefined) {
+      const customerId = payload.customerId === null || payload.customerId === '' ? null : text(payload.customerId, 'مشتری', { max: 100 });
+      if (customerId && find(draft.users, customerId, 'مشتری').role !== 'customer') fail('حساب انتخابی مشتری نیست.');
+      project.customerId = customerId;
+    }
+    if (payload.memberIds !== undefined) {
+      if (!Array.isArray(payload.memberIds) || payload.memberIds.some(memberId => typeof memberId !== 'string')) fail('اعضای پروژه معتبر نیستند.');
+      const memberIds = [...new Set(payload.memberIds)];
+      for (const memberId of memberIds) if (find(draft.users, memberId, 'نیرو').role !== 'worker') fail('فقط نیروی اجرایی به پروژه تخصیص دهید.');
+      project.memberIds = memberIds;
+    }
     if (payload.progress !== undefined) project.progress = integer(payload.progress, 'پیشرفت', 0, 100);
     if (payload.status !== undefined) project.status = choice(payload.status, ['active', 'attention', 'completed'], 'وضعیت پروژه');
     if (payload.clientNote !== undefined) project.clientNote = text(payload.clientNote, 'یادداشت مشتری', { optional: true });
@@ -195,6 +206,30 @@ export function applyAction(state, userId, action, payload = {}) {
     result = { id: id('r'), projectId: project.id, workerId, date, start: payload.start, end: payload.end, breakMinutes, description: text(payload.description, 'شرح کار'), output: text(payload.output, 'خروجی کار', { optional: true }), status: 'submitted', minutes, createdAt: now(), version: 1, rate: historicalRate(worker, date), laborCost: 0 };
     draft.reports.push(result); audit(draft, user, action, result, 'گزارش برای بررسی ثبت شد.');
     result = safeReport(result, user.role === 'manager');
+  } else if (action === 'report.update') {
+    if (!['worker', 'manager'].includes(user.role)) fail('اصلاح گزارش برای این حساب مجاز نیست.', 403, 'FORBIDDEN');
+    const report = find(draft.reports, payload.id, 'گزارش');
+    requireProject(draft, user, report.projectId);
+    if (user.role === 'worker' && report.workerId !== user.id) fail('فقط گزارش خود را اصلاح کنید.', 403, 'FORBIDDEN');
+    if (!['submitted', 'changes_requested', 'rejected'].includes(report.status)) fail('گزارش تأییدشده تغییرپذیر نیست.', 409, 'IMMUTABLE_REPORT');
+    integer(payload.version, 'نسخه گزارش', 1);
+    if (payload.version !== report.version) fail('گزارش تغییر کرده است؛ صفحه را تازه‌سازی کنید.', 409, 'VERSION_CONFLICT');
+    if (payload.workerId !== undefined && payload.workerId !== report.workerId) fail('نیروی گزارش قابل تغییر نیست.', 403, 'FORBIDDEN');
+    const project = requireProject(draft, user, payload.projectId);
+    const worker = find(draft.users, report.workerId, 'نیروی اجرایی');
+    if (worker.role !== 'worker' || !project.memberIds.includes(worker.id)) fail('نیروی انتخابی عضو این پروژه نیست.', 403, 'FORBIDDEN');
+    const date = isoDate(payload.date);
+    const start = clock(payload.start), end = clock(payload.end);
+    if (end <= start) fail('ساعت پایان باید پس از ساعت شروع باشد.');
+    const breakMinutes = integer(payload.breakMinutes ?? 0, 'دقیقه استراحت', 0, end - start - 1);
+    const description = text(payload.description, 'شرح کار');
+    const output = text(payload.output, 'خروجی کار', { optional: true });
+    const rate = date === report.date ? report.rate : historicalRate(worker, date);
+    Object.assign(report, { projectId: project.id, date, start: payload.start, end: payload.end, breakMinutes, description, output, minutes: end - start - breakMinutes, rate, laborCost: 0, status: 'submitted', version: report.version + 1 });
+    delete report.reviewNote;
+    delete report.reviewedBy;
+    audit(draft, user, action, report, 'گزارش اصلاح و دوباره برای بررسی ارسال شد.');
+    result = safeReport(report, user.role === 'manager');
   } else if (action === 'report.review') {
     manager(user);
     const report = find(draft.reports, payload.id, 'گزارش');
@@ -283,6 +318,10 @@ export function applyAction(state, userId, action, payload = {}) {
     const applicable = worker.rateHistory.filter(entry => entry.effectiveDate <= today).at(-1);
     if (applicable) worker.hourlyRate = applicable.hourlyRate;
     result = safeUser(worker, true); audit(draft, user, action, worker, 'نرخ تاریخ‌دار نیرو ثبت شد.');
+  } else if (action === 'inventory.create') {
+    manager(user);
+    result = { id: id('inv'), name: text(payload.name, 'نام کالا', { max: 160 }), unit: text(payload.unit, 'واحد', { max: 40 }), quantity: quantity(payload.quantity, 'موجودی اولیه', true), minQuantity: quantity(payload.minQuantity, 'حداقل موجودی', true), unitPrice: integer(payload.unitPrice, 'قیمت واحد') };
+    draft.inventory.push(result); audit(draft, user, action, result, 'کالای جدید به انبار افزوده شد.');
   } else if (action === 'inventory.receive') {
     manager(user); const stock = find(draft.inventory, payload.id, 'کالای انبار');
     const received = quantity(payload.quantity);

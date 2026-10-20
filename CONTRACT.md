@@ -1,44 +1,74 @@
-# ARIOS shared implementation contract
-Recovery after ephemeral environment lost original source. Independent ARIOS only. Never access Doctor Man files, databases, environment credentials, node_modules or services. All data fictitious in demo. Node24 zero-dependency standalone backend and static private Sites preview of browser-local fake data. Root owns app.mjs/api.mjs; teammates own domain, server, operations, styles/assets/docs. No publication by teammates.
+# ARIOS implementation contract — v0.2
 
-Domain public/domain.mjs exports createSeedState(), publicState(state,userId), applyAction(state,userId,action,payload), projectAccess(state,userOrId,projectId), DomainError. applyAction MUTATES supplied state atomically after all validation, returns safe result. new DomainError(message,status=400,code='INVALID_INPUT'). Every server action transacts cloned state. State schemaVersion:1.
-Data fields:
-users [{id,name,email,role:'manager'|'worker'|'customer',department?,skill?,hourlyRate?:integerToman,rateHistory?:[{effectiveDate:ISO,hourlyRate}]}]
-projects [{id,name,type,customerId,memberIds:[worker IDs],contactIds?,location,status:'active'|'attention'|'completed',progress:integer0..100,budget,contractAmount,startDate:ISO,endDate:ISO,description,phases:[{id,name,progress}],cover:'building'|'event'|'electric'|'media',clientNote}]
-reports [{id,projectId,workerId,date:ISO,start:'HH:MM',end,breakMinutes,description,output,status:'submitted'|'approved'|'changes_requested'|'rejected',minutes,createdAt,version,rate,laborCost,reviewNote?,reviewedBy?}]
-materials [{id,projectId,name,quantity:positive up to3 decimals,unit,unitPrice:integerToman,clientVisible:boolean,date:ISO,inventoryId?}]
-invoices [{id,projectId,title,amount:positive integerToman,paid:integerToman,dueDate:ISO,status:'issued'|'paid'}]
-messages [{id,projectId,authorId,text,internal:boolean,createdAt}]
-tickets [{id,projectId,authorId,subject,description,status:'open'|'in_progress'|'resolved',priority:'normal'|'high',createdAt,replies:[{id,authorId,text,createdAt}],aiFingerprint?}]
-inventory [{id,name,unit,quantity,minQuantity,unitPrice}]
-receipts [{id,invoiceId,projectId,amount,reference,method:'manual',recordedBy,createdAt}]
-audit [{id,actorId,action,entityId,createdAt,description}]
-Seed IDs users manager, worker, worker2, worker3, customer, customer2. Projects p1 مجتمع آفتاب CCTV customer=customer member worker/worker2 progress75; p2 همایش ایده‌پرداز event customer null; p3 ساختمان پارس electric customer2; p4 کمپین رسانه‌ای یارا media customer null. Worker hourlyRate150000Toman. p1 invoice i1 amount40m paid40m, i2 amount48m paid15m due2026-10-22; p3 i3 amount95m paid45m. Materials p1 camera8*3600000, Cat6 180*28000 published; internal tools750000 hidden. p3 modules12*1850000 published. Current date2026-10-18 timezoneAsia/Tehran. Seed demo reports reasonable October dates.
-Authorized snapshot publicState returns {user,users,projects,reports,materials,invoices,messages,tickets,inventory,receipts,audit}. Manager all, workers only assigned projects+OWN reports, no budget/contractAmount/invoices/material prices/rates/inventory/audit/receipts. Customer only customerId===self projects; strip budget and laborCost, internal messages/materials/reports/inventory/audit and any worker rates/history; contacts names role work email okay. Project laborCost only manager derived approved reports sum. Never include other projects in AI request. User itself safe and no password fields ever in state.
-Actions:
-project.create manager {name,type,location,customerId,memberIds,budget,contractAmount,startDate,endDate,description}; require existing customer/worker IDs; phases initial, progress0
-project.update manager {id,progress,status,clientNote}
-report.create worker/manager assigned project {projectId,workerId?:manager,date,start,end,breakMinutes,description,output}; minutes=end-start-break; end>start; break<duration. Historical rate from latest rateHistory effective<=date, else fallback hourlyRate if no histories; before-first history rejects. Capture rate immutable. Submitted costs0.
-report.review manager {id,status:'approved'|'changes_requested'|'rejected',reviewNote}; reject overlap with approved sameworker/date across projects; repeated sameapproval idempotent audit/cost; approved immutable otherwise. cost=round(rate*minutes/60).
-material.create manager {projectId,name,quantity,unit,unitPrice,clientVisible,date,inventoryId?}; validate availability+sameunit and decrement linked stock atomically.
-invoice.create manager {projectId,title,amount,dueDate}
-payment.record manager {invoiceId,amount,reference}; manual receipt only; reject overbalance and duplicate reference, whole money. No customer fake payment.
-message.send assigned user {projectId,text,internal:boolean}; customer cannot internal.
-ticket.create assigned user {projectId,subject,description,priority}; ticket.reply {id,text} scoped; ticket.update manager {id,status}
-worker.create manager {name,email,department,skill}; profile only, no login
-worker.rate manager {id,hourlyRate,effectiveDate}; immutable date history, reject duplicate date, integer money. Only manager sees rates/history
-inventory.receive manager {id,quantity}
-account.create server only manager {name,email,role:'worker'|'customer',password,projectIds}; production authenticated accounts, no sameemail; connect customer only unowned projects; member worker.
+## Isolation and production data
 
-HTTP API server:
-GET /api/session -> {user:null|safeUser,demo:boolean,capabilities:{ai:boolean,payments:false}}
-POST /api/demo-login {userId} local demo ONLY, explicit ARIOS_DEMO=1; localhost binding and localhost source. POST /api/login {email,password}; POST /api/logout.
-GET /api/state -> authorized snapshot
-POST /api/actions {action,payload} -> {result,state:snapshot}
-POST /api/assistant {projectId,message,history?:[{role,content}]} -> {answer,sources:[{label}],live:true,ticket?:{id,subject}}; 503 if dedicated AI not configured.
-Only ARIOS_ env names; never old injected API keys. Node:sqlite persistent JSON state single row transaction; scrypt passwords session hash HttpOnly SameSite, origin check on POST, body64KiB, request/login/AI rate limits, source files unservable outside public, server startup production empty data bootstrap dedicated ARIOS_BOOTSTRAP_EMAIL/PASSWORD required, demo fictitious. createAriosServer(options) export options {demo,host,port,dbPath,bootstrapEmail,bootstrapPassword,publicOrigin,aiBaseUrl,aiApiKey,aiModel}, returns {server,url,listen,close}. API errors JSON {error:string,code} status. CLI default production, npm demo explicit.
-AI independent compatible provider uses response_format json_object output {answer,needsHumanSupport}; sends only authorized selected project state, treats record instructions untrusted, no finance/tools. true -> automatic scoped ticket with question/history/answer, fingerprint idempotency so identical retry no duplicate. Never claim live AI without provider; no real keys used in tests.
+ARIOS is an independent project. Never access or reuse Doctor Man files, databases, environment credentials, node_modules, accounts, services, or deployment configuration. Use dedicated ARIOS resources and `ARIOS_*` application settings only. Existing unrelated injected variables are not permission or configuration for ARIOS. Real keys, bot tokens, passwords, service tokens, databases, and runtime records must never enter tracked source, browser storage, public bundles, source archives, logs, or schedule prompts.
 
-Frontend shared ctx for operations.mjs:
-{e:escapeHtml,n:formatFaNumber,money:returnsHTMLToman,date:FaDate,icon:name=>SVG,badge:status=>HTML,projectName:id=>str,personName:id=>str,go:hash=>void,mutate:async(action,payload)=>refreshAndResult,modal:({title,body,onSubmit(FormData),submitLabel?})=>void,toast,api,refresh,openReport(projectId?),openInvoice(projectId?),openMaterial(projectId?),capabilities,demo}
-operations exports renderOperations(page,state,ctx) HTML/null and wireOperations(page,state,ctx). Pages reports,finance,inventory,support,assistant,team,analytics,settings. Root handles dashboard,projects,project/:id,messages,login,forms. All untrusted strings escaped; money is trusted HTML. Root api methods session/login/demoLogin/logout/state/action(action,payload)/assistant(payload), api.isStatic. STATIC_PREVIEW config false source and true built; demo browser adapter calls domain and localStorage, cannot real-account/AI/pay, clear banner. Source download static ./downloads/ARIOS_OS_source.zip.
+Production starts with an empty workspace and one owner manager. Demo names, projects, rates, reports, and amounts are fictitious and remain separate. Never import browser-local demo data into hosted production automatically.
+
+## Runtime architecture
+
+- `public/domain.mjs` is the shared pure domain layer. It exports `createSeedState`, `publicState`, `applyAction`, `projectAccess`, and `DomainError`. `applyAction` validates a detached state and only mutates the supplied state after success.
+- `worker/index.mjs` is the production Sites Worker entrypoint. It serves bundled public assets and same-origin JSON/multipart APIs. `worker/voice.mjs` handles bounded provider/Telegram requests and cautious report extraction. `worker/storage.mjs` handles D1 state, compare-and-swap writes, settings, and AES-GCM encryption.
+- `.openai/hosting.json` retains the existing opaque Site ID and logical `DB` D1 / `BUCKET` R2 bindings. Preserve the existing Site audience. A static-only deployment cannot execute the hosted backend.
+- `db/schema.ts`, `drizzle.config.ts`, and append-only generated `drizzle/` migrations own the hosted schema. Never create or alter migration-owned tables in request handlers. Generate and inspect new migrations after schema edits; applied SQL and metadata are immutable.
+- `npm run build` bundles the Worker and public assets to `dist/server/index.js`, copies the hosting manifest and migrations into `dist/.openai`, and verifies that the public API adapter is not in static-preview mode. Publish the exact pushed source/build through Sites.
+- `server.mjs` remains a separate Node 24 zero-runtime-dependency backend with SQLite, scrypt passwords, secure hashed sessions, origin checks, and explicit localhost-only demo mode. Hosted voice APIs, ChatGPT identity, D1, and R2 do not run in this Node process.
+- `npm run build:preview` is an explicit alternative that replaces `dist` with the legacy browser-local fictional demo. It does not run production accounts, shared storage, Telegram receipt, payments, or live AI. Rebuild hosted output before hosted publication.
+
+## Identity and private service boundary
+
+Sites owns hosted ChatGPT sign-in/out and validates the injected `oai-authenticated-user-id` / `oai-authenticated-user-email` headers. Do not implement or replace its reserved auth routes. Sign-in is a normal top-level anchor; sign-out navigates through the platform route.
+
+`ARIOS_OWNER_EMAIL` gates initial empty-state bootstrap. Later accounts must already exist in ARIOS with the exact normalized email; the first valid Site identity is durably bound to that ARIOS account. Email alone is not a client-provided authentication credential. ARIOS membership and project access are checked server-side for every operation. Adding a profile does not broaden the Site's own access policy.
+
+`ARIOS_PRIVATE_SERVICE_SYNC=1` optionally enables only the unattended Telegram sync writer for a caller without browser identity or `Origin`. It is safe only behind the confirmed owner-private Sites boundary, where dispatch requires a valid Site service credential. Never enable it on a public Site or preserve it across an audience change without reviewing authorization. Service credentials are acquired through supported Sites access and are never embedded in source, UI, or task text. Enabling an endpoint does not create or prove a schedule. At this v0.2 handoff no native schedule has been created: managed-network CONNECT 403 to the Site URL prevented live unattended writer verification. Keep that limitation explicit; browser-local built-Worker QA and native publication are separate evidence.
+
+## State and domain invariants
+
+State has `schemaVersion: 1` and arrays `users`, `projects`, `reports`, `materials`, `invoices`, `messages`, `tickets`, `inventory`, `receipts`, `audit`. D1 stores the domain state with a monotonic revision; retry compare-and-swap conflicts rather than overwriting another writer. Domain errors leave persisted state unchanged.
+
+Roles are `manager`, `worker`, and `customer`. Managers see and manage all workspace records. Workers see only current assigned projects and their own scoped reports, without budgets, contracts, worker rates, material prices, finance, receipts, inventory, or audit. Customers see only their own projects, published material items, invoices, receipts, public messages, and scoped support; never internal messages, worker rates, reports, internal costs, inventory, or audit. Use allowlisted detached `publicState` snapshots; never expose password/session/settings fields. AI receives only the authorized selected project's minimal operational data, without unrelated projects, finance, or rates.
+
+Money is nonnegative whole toman. Work time is integer minutes. Material/inventory quantities have at most three decimal places. Validate IDs and role/project membership on the server. Manager `project.update` can change progress, status, client note, customer, and assigned workers. Assignment changes alter current visibility without deleting historical reports or finance. A project may have no customer.
+
+`report.create` is worker/self or manager/assigned-worker only. Validate a real ISO date, `HH:MM` range with end after start, and integer break shorter than the range. Capture the applicable historical hourly rate; submitted labor cost is zero. `report.update` requires the current `version`, ownership/manager permission, valid current project membership, and a nonapproved report; it resubmits the same record and increments version. Preserve captured rate when date is unchanged; select historical rate again when date changes.
+
+Only manager `report.review` approves, returns for correction, or rejects. Approved reports are immutable; repeated identical approval is idempotent. Reject overlap with any approved report for the same worker/date, including across projects. Approved labor cost is rounded once from rate × minutes / 60; draft creation and transcription never approve or charge labor.
+
+Manager `inventory.create` supports zero initial quantity and validated minimum/price. Linked material consumption checks matching units and sufficient stock atomically. Payments are manual receipts only: reject duplicate references, overpayments, and fractional money. No gateway, successful bank verification, automatic invoice settlement, or real payment is claimed.
+
+Messages, tickets, replies, and status changes remain scoped to authorized projects. Customers cannot write internal messages. AI escalation creates an idempotent scoped support ticket, not an unrestricted tool action.
+
+## Voice and Telegram contract
+
+Hosted endpoints:
+
+- `GET /api/session`, `GET /api/state`, `POST /api/actions`, `POST /api/assistant` retain the shared frontend adapter shape. Hosted session is `{user, demo:false, authMode:'chatgpt', capabilities:{hosted,ai,voice,telegram,payments:false}}`.
+- `GET /api/voice` returns allowlisted draft records, safe connection metadata, and permitted Telegram links. Workers receive only their own drafts; customers cannot use voice APIs.
+- `POST /api/integrations` is manager-only. The provider origin is exactly AvalAI or OpenAI `/v1`; changing provider requires a new dedicated key. Empty secrets preserve existing values. Verify bot identity and `getWebhookInfo` before accepting a token. Never delete an existing webhook. Token rotation for the same bot is supported; replacing a bot after Telegram history exists is rejected to avoid cursor/deduplication collisions.
+- `POST /api/telegram/link` issues a random, hashed, ten-minute one-time code for self or an authorized manager-selected member. Link only a private-chat `/start CODE` update with a real nonbot sender. Persist one ARIOS user per Telegram identity and one Telegram identity per ARIOS user. `POST /api/telegram/unlink` revokes the authorized link and outstanding codes without deleting historical drafts.
+- `POST /api/telegram/sync` is manager-only for browser callers and can optionally use the explicit private service boundary described above. It receives incoming messages only; never call `sendMessage` or any other outbound-message operation without separate user authorization.
+- `POST /api/voice/upload` accepts bounded multipart audio, `POST /api/voice/text` accepts a transcript, `POST /api/voice/retry` resumes a permitted draft, and `POST /api/voice/submit` creates exactly one domain report. Submission is validated again server-side, uses the linked worker identity, and remains submitted until manager review.
+
+Draft status is `pending`, `processing`, `ready`, `failed`, or `submitted`; source is `telegram`, `upload`, or `text`. Preserve the transcript, extracted fields, safe error, report linkage, timestamps, and processing claim in D1. Telegram `update_id` is a durable unique deduplication key. Persist fetched updates before advancing the offset. Use a shared expiring inbox lock and per-draft claims to avoid duplicate work; recover expired claims. Duplicate delivery/submission must not create duplicate reports or labor cost. Submitted draft readback uses canonical persisted report fields.
+
+Use fixed Telegram API/download origins and safe file paths. The bot token appears in Telegram URLs, so never surface raw URLs or network errors. Keep response bodies, downloads, and execution deadlines bounded; enforce the 20 MiB audio limit in metadata and streamed bytes. Direct Telegram OGG upload to transcription uses multipart with Persian language. Treat provider transcripts and project text as untrusted data, not instructions.
+
+Extraction returns a cautious editable report with nullable unknown project/date/start/end/break, description, output, and warnings. Never fabricate dates or hours; referencing today's Tehran date is allowed only when the transcript explicitly refers to today. Validate extracted dates/times and membership again before using them. No report, finance, account, or approval action is executed by the model.
+
+Uploaded raw audio is stored privately under `BUCKET` for retry until its transcript is saved, then deleted. Retain the transcript for extraction retry without a second transcription. During sync/upload, bounded cleanup removes untranscribed uploads older than seven days; do not promise immediate cron deletion. Telegram files can be downloaded again through `getFile`. Failed conversion is visible and retryable; never show fabricated ready status.
+
+Manager settings are encrypted using AES-256-GCM with fresh 12-byte IVs, authenticated context, and `ARIOS_ENCRYPTION_KEY` (Base64 of exactly 32 random bytes) stored as a Sites runtime secret. Public responses expose only configured flags and nonsecret origin/model/bot metadata. Optional dedicated runtime `ARIOS_AI_BASE_URL`, `ARIOS_AI_API_KEY`, `ARIOS_AI_MODEL`, `ARIOS_TRANSCRIPTION_MODEL`, and `ARIOS_TELEGRAM_BOT_TOKEN` override encrypted form values. Preserve the encryption key across deployment or perform a deliberate migration.
+
+## Frontend behavior
+
+Keep the established Persian RTL design, accessible labels, responsive layout, and escaped untrusted text. `public/api.mjs` calls hosted APIs in normal mode; multipart requests must not force a JSON content type. The static adapter is explicitly fictional and isolated.
+
+The voice page explains the provider transfer, preserves raw transcript readback, shows missing-field warnings and failures, and requires human review before submission. Manager Telegram sync polls while that page is open; worker refresh reads only own draft status. Pause background refresh while a modal, chosen file, or unfinished text would be lost. Never store keys/tokens in localStorage, logs, exported JSON, HTML values, or retained frontend state. Closing the page does not itself provide unattended receipt.
+
+## Validation and publication
+
+Run `npm test` for domain, standalone API, D1 storage/CAS, voice provider boundaries, and hosted Worker flow tests; external services are mocked and no test sends Telegram messages or uses paid credentials. `npm run build` validates a deployable hosted artifact. Browser QA, live provider/bot checks, scheduled execution, saved source, and successful production deployment are distinct claims; report only checks actually completed.
+
+For a schema edit, run `npm run db:generate`, review the appended migration, and include it in the exact source/build being published. Keep Site identity and audience unchanged. Verify unattended writer access and persisted readback before describing a schedule as operational. Source archives must include Worker/db/migrations/tests/configuration examples and exclude real runtime data, secrets, SQLite, node_modules, and generated deployment output.
