@@ -68,7 +68,7 @@ async function request(url, init, { fetcher, maxBytes, timeoutMs, binary = false
   const controller = new AbortController();
   let timer;
   const work = async () => {
-    const response = await fetcher(url, { ...init, signal: controller.signal, redirect: 'error' });
+    const response = await fetcher(url, { ...init, signal: controller.signal, redirect: 'manual' });
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
       if (response.status === 429) fail('سرویس شلوغ است؛ کمی بعد دوباره تلاش کنید.', 429, 'UPSTREAM_RATE_LIMITED');

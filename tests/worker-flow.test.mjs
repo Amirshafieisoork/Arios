@@ -15,7 +15,7 @@ const responseJSON = value => new Response(JSON.stringify(value), { headers: { '
 function fixture(t) {
   const db = createTestD1();
   t.after(() => db.close());
-  const mock = { updates: [], calls: [], extractionFailure: false, transcriptionFailure: false, botId: 123456 };
+  const mock = { updates: [], calls: [], extractionFailure: false, transcriptionFailure: false, botId: 123456, telegramFailure: null, providerRedirect: null };
   const bucket = {
     objects: new Map(), puts: [], gets: [], deletes: [],
     async put(key, value, options = {}) {
@@ -33,13 +33,22 @@ function fixture(t) {
   const fetcher = async (input, options = {}) => {
     const url = new URL(String(input));
     mock.calls.push({ host: url.hostname, path: url.pathname, options });
+    // Cloudflare Workers reject redirect:"error" before making any request.
+    // Node fetch accepts it, so enforce the hosted runtime contract here.
+    if (options.redirect === 'error') throw new TypeError('Unsupported redirect mode: error');
+    assert.equal(options.redirect, 'manual', 'Upstream redirects must be inspected before any credentials can be forwarded.');
     if (url.hostname === 'api.telegram.org') {
+      if (mock.telegramFailure && url.pathname.endsWith('/' + mock.telegramFailure.method)) {
+        if (mock.telegramFailure.status >= 300 && mock.telegramFailure.status < 400) return new Response(null, { status: mock.telegramFailure.status, headers: { Location: 'https://untrusted.test/capture-telegram-token' } });
+        return new Response(JSON.stringify({ ok: false, error_code: mock.telegramFailure.status, description: 'Untrusted upstream detail: ' + BOT_TOKEN }), { status: mock.telegramFailure.status, headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.pathname.endsWith('/getMe')) return responseJSON({ ok: true, result: { id: mock.botId, is_bot: true, username: 'AriosTestBot' } });
       if (url.pathname.endsWith('/getWebhookInfo')) return responseJSON({ ok: true, result: { url: '' } });
       if (url.pathname.endsWith('/getUpdates')) return responseJSON({ ok: true, result: mock.updates });
       if (url.pathname.endsWith('/getFile')) return responseJSON({ ok: true, result: { file_id: 'voice-test', file_size: 8, file_path: 'voice/test.ogg' } });
       if (url.pathname.startsWith('/file/bot')) return new Response(new Uint8Array([79, 103, 103, 83, 0, 1, 2, 3]), { headers: { 'Content-Type': 'audio/ogg' } });
     }
+    if (url.hostname === 'api.avalai.ir' && mock.providerRedirect && url.pathname.endsWith(mock.providerRedirect)) return new Response(null, { status: 301, headers: { Location: 'https://untrusted.test/capture-provider-key' } });
     if (url.hostname === 'api.avalai.ir' && url.pathname === '/v1/audio/transcriptions') {
       if (mock.transcriptionFailure) return new Response('Temporarily unavailable', { status: 503 });
       assert(options.body instanceof FormData);
@@ -364,23 +373,102 @@ test('manager assistant receives operational context without finance or worker r
   assert(!encoded.includes('900000'));
 });
 
-test('private unattended sync accepts only explicitly enabled service requests without browser origin', async t => {
+test('public site keeps anonymous session safe and rejects API writes including obsolete service bypass', async t => {
   const f = fixture(t);
-  await f.call('/api/session');
-  const disabled = await f.call('/api/telegram/sync', { method: 'POST', identity: null, origin: null, body: {} });
-  assert.equal(disabled.status, 401);
-  f.env.ARIOS_PRIVATE_SERVICE_SYNC = '1';
-  const browser = await f.call('/api/telegram/sync', { method: 'POST', identity: null, origin: ORIGIN, body: {} });
-  assert.equal(browser.status, 403);
-  const noBot = await f.call('/api/telegram/sync', { method: 'POST', identity: null, origin: null, body: {} });
-  assert.equal(noBot.status, 200);
-  assert.deepEqual(noBot.data, { received: 0, processed: 0, failed: 0, configured: false });
+  const anonymousSession = await f.call('/api/session', { identity: null });
+  assert.equal(anonymousSession.status, 200);
+  assert.equal(anonymousSession.data.user, null);
+  assert.equal(anonymousSession.data.authMode, 'chatgpt');
+  assert.equal('users' in anonymousSession.data, false);
+  assert.equal(f.db.sqlite.prepare('SELECT count(*) AS n FROM arios_state').get().n, 0);
+  for (const legacyFlag of [undefined, '1']) {
+    if (legacyFlag === undefined) delete f.env.ARIOS_PRIVATE_SERVICE_SYNC;
+    else f.env.ARIOS_PRIVATE_SERVICE_SYNC = legacyFlag;
+    for (const origin of [null, ORIGIN]) {
+      const denied = await f.call('/api/telegram/sync', { method: 'POST', identity: null, origin, body: {} });
+      assert.equal(denied.status, 401);
+      assert.equal(denied.data.code, 'UNAUTHORIZED');
+    }
+  }
   assert.equal(f.mock.calls.length, 0);
   await configuredWorkspace(f);
-  const service = await f.call('/api/telegram/sync', { method: 'POST', identity: null, origin: null, body: {} });
-  assert.equal(service.status, 200, JSON.stringify(service.data));
-  assert.equal(service.data.received, 0);
-  assert.equal(service.data.processed, 0);
-  assert.equal(service.data.failed, 0);
-  assert(f.mock.calls.some(call => call.path.endsWith('/getUpdates')));
+  const encrypted = f.db.sqlite.prepare('SELECT value FROM arios_settings WHERE key=?').get('integrations').value;
+  const callCount = f.mock.calls.length;
+  for (const path of ['/api/state', '/api/voice']) {
+    const denied = await f.call(path, { identity: null });
+    assert.equal(denied.status, 401, path);
+    assert.equal('drafts' in denied.data, false);
+    assert.equal('users' in denied.data, false);
+  }
+  for (const path of ['/api/telegram/sync', '/api/actions', '/api/integrations', '/api/voice/text']) {
+    for (const origin of [null, ORIGIN]) {
+      const denied = await f.call(path, { method: 'POST', identity: null, origin, body: { transcript: TRANSCRIPT, aiApiKey: 'unauthorized-test-value' } });
+      assert.equal(denied.status, 401, path);
+      assert.equal(denied.data.code, 'UNAUTHORIZED');
+    }
+  }
+  const publicSession = await f.call('/api/session', { identity: null });
+  assert.equal(publicSession.status, 200);
+  assert.equal(publicSession.data.user, null);
+  assert(!JSON.stringify(publicSession.data).includes(AI_KEY));
+  assert(!JSON.stringify(publicSession.data).includes(BOT_TOKEN));
+  assert.equal(f.db.sqlite.prepare('SELECT value FROM arios_settings WHERE key=?').get('integrations').value, encrypted);
+  assert.equal(f.mock.calls.length, callCount);
+});
+
+test('Telegram setup classifies upstream failures without following redirects or saving supplied secrets', async t => {
+  const cases = [
+    { upstream: 401, status: 422, code: 'TELEGRAM_TOKEN_INVALID' },
+    { upstream: 429, status: 429, code: 'TELEGRAM_RATE_LIMITED' },
+    { upstream: 301, status: 502, code: 'TELEGRAM_REDIRECT_BLOCKED' },
+  ];
+  for (const method of ['getMe', 'getWebhookInfo']) {
+    for (const scenario of cases) {
+      await t.test(`${method} HTTP ${scenario.upstream}`, async sub => {
+        const f = fixture(sub);
+        assert.equal((await f.call('/api/session')).status, 200);
+        f.mock.telegramFailure = { method, status: scenario.upstream };
+        const setup = await f.post('/api/integrations', { aiBaseUrl: 'https://api.avalai.ir/v1', aiApiKey: AI_KEY, aiModel: 'gpt-4o-mini', transcriptionModel: 'whisper-1', telegramBotToken: BOT_TOKEN });
+        assert.equal(setup.status, scenario.status, JSON.stringify(setup.data));
+        assert.equal(setup.data.code, scenario.code);
+        assert(!JSON.stringify(setup.data).includes(BOT_TOKEN));
+        assert(!JSON.stringify(setup.data).includes(AI_KEY));
+        assert(!JSON.stringify(setup.data).includes('Untrusted upstream detail'));
+        assert.equal(f.db.sqlite.prepare('SELECT value FROM arios_settings WHERE key=?').get('integrations'), undefined);
+        assert(f.mock.calls.some(call => call.path.endsWith('/' + method)));
+        assert(f.mock.calls.every(call => call.host === 'api.telegram.org'));
+        assert(f.mock.calls.every(call => call.options.redirect === 'manual'));
+        const safe = await f.call('/api/voice');
+        assert.equal(safe.data.integration.aiConfigured, false);
+        assert.equal(safe.data.telegram.configured, false);
+      });
+    }
+  }
+});
+
+test('provider redirects are blocked across transcription, extraction and assistant calls', async t => {
+  const f = fixture(t);
+  const { projectId } = await configuredWorkspace(f);
+  const encrypted = f.db.sqlite.prepare('SELECT value FROM arios_settings WHERE key=?').get('integrations').value;
+  f.mock.providerRedirect = '/audio/transcriptions';
+  const uploaded = await uploadVoice(f, projectId);
+  assert.equal(uploaded.status, 200);
+  assert.equal(uploaded.data.status, 'failed');
+  assert.equal(uploaded.data.transcript, '');
+  assert(uploaded.data.error);
+  assert(!JSON.stringify(uploaded.data).includes(AI_KEY));
+  f.mock.providerRedirect = '/chat/completions';
+  const draft = await f.post('/api/voice/text', { projectId, transcript: TRANSCRIPT });
+  assert.equal(draft.status, 200);
+  assert.equal(draft.data.status, 'failed');
+  assert.equal(draft.data.transcript, TRANSCRIPT);
+  assert(!JSON.stringify(draft.data).includes(AI_KEY));
+  const assistant = await f.post('/api/assistant', { projectId, message: 'وضعیت اجرای شبکه چیست؟' });
+  assert.equal(assistant.status, 502);
+  assert.equal(typeof assistant.data.answer, 'undefined');
+  assert(!JSON.stringify(assistant.data).includes(AI_KEY));
+  assert.equal(f.db.sqlite.prepare('SELECT value FROM arios_settings WHERE key=?').get('integrations').value, encrypted);
+  assert.equal((await f.call('/api/state')).data.reports.length, 0);
+  assert(f.mock.calls.every(call => ['api.telegram.org', 'api.avalai.ir'].includes(call.host)));
+  assert(f.mock.calls.every(call => call.options.redirect === 'manual'));
 });

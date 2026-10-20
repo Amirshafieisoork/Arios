@@ -14,7 +14,7 @@ const errorCode = code => error => error instanceof VoiceError && error.code ===
 test('OGG is sent as multipart with Persian language and dedicated provider credentials', async () => {
   const result = await transcribeAudio({ bytes: audio, mimeType: 'audio/ogg; codecs=opus', fileName: '../../private.oga', config, fetcher: async (url, init) => {
     assert.equal(url, 'https://api.avalai.ir/v1/audio/transcriptions');
-    assert.equal(init.redirect, 'error');
+    assert.equal(init.redirect, 'manual');
     assert.equal(init.headers.Authorization, 'Bearer test-only-arios-key');
     assert.equal(init.headers['Content-Type'], undefined);
     assert.equal(init.body.get('language'), 'fa');
@@ -121,7 +121,7 @@ test('Telegram polling uses fixed URL and bounded offset, without sending messag
   const updates = [{ update_id: 5, message: { voice: { file_id: 'voice-id' } } }];
   assert.deepEqual(await fetchTelegramUpdates({ token, offset: 5, fetcher: async (url, init) => {
     assert.equal(url, `https://api.telegram.org/bot${token}/getUpdates`);
-    assert.equal(init.redirect, 'error');
+    assert.equal(init.redirect, 'manual');
     assert.deepEqual(JSON.parse(init.body), { offset: 5, timeout: 0, limit: 100, allowed_updates: ['message'] });
     return json({ ok: true, result: updates });
   } }), updates);
@@ -133,7 +133,7 @@ test('Telegram polling uses fixed URL and bounded offset, without sending messag
 test('Telegram voice download preserves OGG and accepts missing MIME only with safe audio extension', async () => {
   const calls = [];
   const result = await downloadTelegramVoice({ token, fileId: 'voice-id', fileSize: audio.byteLength, fetcher: async (url, init) => {
-    calls.push(url); assert.equal(init.redirect, 'error');
+    calls.push(url); assert.equal(init.redirect, 'manual');
     if (url.endsWith('/getFile')) { assert.deepEqual(JSON.parse(init.body), { file_id: 'voice-id' }); return json({ ok: true, result: { file_path: 'voice/file_123.oga', file_size: audio.byteLength } }); }
     assert.equal(url, `https://api.telegram.org/file/bot${token}/voice/file_123.oga`);
     return new Response(audio, { headers: { 'Content-Type': 'application/octet-stream' } });
