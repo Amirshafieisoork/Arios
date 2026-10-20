@@ -14,7 +14,8 @@
     "build:preview": "node scripts/build-preview.mjs",
     "package:source": "node scripts/package-source.mjs",
     "db:generate": "drizzle-kit generate",
-    "build": "node scripts/build-hosted.mjs"
+    "build": "node scripts/build-hosted.mjs",
+    "package:hosted": "node scripts/package-hosted.mjs"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.11",
