@@ -13,3 +13,15 @@ dist/
 
 dist-site/
 .vercel/
+
+# Local credentials, runtime files and Supabase CLI metadata
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite3
+*.sqlite3-*
+*.log
+supabase/.temp/
+supabase/.branches/
