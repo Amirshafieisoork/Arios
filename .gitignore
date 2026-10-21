@@ -10,3 +10,6 @@ dist/
 *.db
 *.db-*
 .DS_Store
+
+dist-site/
+.vercel/

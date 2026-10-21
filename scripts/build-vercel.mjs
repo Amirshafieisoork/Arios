@@ -1,0 +1,10 @@
+import {cp,mkdir,rm,readFile,writeFile} from 'node:fs/promises';
+import {resolve} from 'node:path';
+const root=resolve(import.meta.dirname,'..'),out=resolve(root,'dist-site');
+await rm(out,{recursive:true,force:true});await mkdir(out,{recursive:true});
+await cp(resolve(root,'web'),out,{recursive:true});
+await cp(resolve(root,'public/assets'),resolve(out,'assets'),{recursive:true});
+await cp(resolve(root,'public'),resolve(out,'portal'),{recursive:true});
+await writeFile(resolve(out,'portal/preview-config.mjs'),'export const STATIC_PREVIEW = false;\n');
+for(const name of ['login','setup'])if(!(await readFile(resolve(out,name+'.html'),'utf8')).includes('ARIOS'))throw Error('Missing ARIOS page');
+console.log('Public ARIOS website and separate login portals built: dist-site');

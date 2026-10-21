@@ -1,6 +1,6 @@
 {
   "name": "arios-os",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Independent Persian ARIOS project operations and customer portal",
@@ -15,7 +15,9 @@
     "package:source": "node scripts/package-source.mjs",
     "db:generate": "drizzle-kit generate",
     "build": "node scripts/build-hosted.mjs",
-    "package:hosted": "node scripts/package-hosted.mjs"
+    "package:hosted": "node scripts/package-hosted.mjs",
+    "build:vercel": "node scripts/build-vercel.mjs",
+    "build:public-site": "npm run build:vercel && node scripts/build-public-site.mjs"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.11",
