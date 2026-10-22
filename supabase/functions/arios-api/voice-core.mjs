@@ -20,12 +20,23 @@ export class VoiceError extends Error {
 }
 const fail = (message, status = 400, code = 'INVALID_VOICE_INPUT') => { throw new VoiceError(message, status, code); };
 const LOG_CODES = new Set(['AI_NOT_CONFIGURED', 'AI_CONFIG_INVALID', 'AI_AUTH_FAILED', 'AI_REGION_UNSUPPORTED', 'AI_QUOTA_EXCEEDED', 'AI_MODEL_UNAVAILABLE', 'AI_UNSUPPORTED_PARAMETER', 'AI_AUDIO_UNSUPPORTED', 'AI_INVALID_OUTPUT', 'AI_OUTPUT_TRUNCATED', 'UPSTREAM_FAILED', 'UPSTREAM_RATE_LIMITED', 'UPSTREAM_RESPONSE_TOO_LARGE', 'UPSTREAM_INVALID_RESPONSE', 'UPSTREAM_TIMEOUT', 'UPSTREAM_UNAVAILABLE']);
+const QUOTA_MESSAGES = Object.freeze({
+  insufficient_quota: 'سرویس برای این کلید سهمیهٔ API قابل استفاده ندارد؛ فعال‌بودن اعتبار API و حساب یا پروژهٔ مرتبط باید بررسی شود. این خطا به‌تنهایی نشان‌دهندهٔ مصرف قبلی نیست.',
+  credit_balance_exhausted: 'سرویس موجودی قابل استفادهٔ حساب API مرتبط با این کلید را صفر اعلام کرده است؛ موجودی همان حساب بررسی شود.',
+  organization_usage_limit_exceeded: 'سرویس رسیدن به سقف مجاز مصرف سازمان API را اعلام کرده است؛ محدودیت سازمان مرتبط با این کلید بررسی شود.',
+  organization_spend_limit_exceeded: 'سرویس رسیدن به سقف هزینهٔ تنظیم‌شده برای سازمان API را اعلام کرده است؛ سقف هزینهٔ همان سازمان بررسی شود.',
+  project_spend_limit_exceeded: 'سرویس رسیدن به سقف هزینهٔ تنظیم‌شده برای پروژهٔ API را اعلام کرده است؛ سقف هزینهٔ پروژهٔ مرتبط با این کلید بررسی شود.',
+  billing_hard_limit_reached: 'سرویس رسیدن به سقف قطعی هزینهٔ حساب API را اعلام کرده است؛ محدودیت هزینهٔ حساب بررسی شود.',
+  billing_not_active: 'صورتحساب API برای حساب مرتبط با این کلید فعال نیست؛ وضعیت فعال‌سازی API بررسی شود.',
+});
+const PROVIDER_CODES = new Set([...Object.keys(QUOTA_MESSAGES), 'rate_limit_exceeded', 'server_error', 'invalid_api_key', 'model_not_found', 'unsupported_country_region_territory']);
 /** Log classification only: never include the upstream message or request content. */
 export function logAIFailure(error, stage = 'ai') {
   const knownStage = ['chat', 'transcription', 'public-chat'].includes(stage) ? stage : 'ai';
   const code = LOG_CODES.has(error?.code) ? error.code : 'UPSTREAM_UNAVAILABLE';
   const providerStatus = Number.isInteger(error?.providerStatus) && error.providerStatus >= 100 && error.providerStatus <= 599 ? error.providerStatus : undefined;
-  console.warn(JSON.stringify({ event: 'arios_ai_failure', stage: knownStage, code, ...(providerStatus === undefined ? {} : { providerStatus }) }));
+  const providerCode = PROVIDER_CODES.has(error?.providerCode) ? error.providerCode : undefined;
+  console.warn(JSON.stringify({ event: 'arios_ai_failure', stage: knownStage, code, ...(providerStatus === undefined ? {} : { providerStatus }), ...(providerCode ? { providerCode } : {}) }));
 }
 const plain = value => typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim() : '';
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -66,14 +77,31 @@ async function providerFailure(response, service) {
       detail = new TextDecoder().decode(bytes).toLowerCase();
     } catch {} finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
   }
+  let providerError, legacyDetail = detail;
+  try {
+    const body = JSON.parse(detail);
+    providerError = isObject(body?.error) ? body.error : undefined;
+    legacyDetail = typeof providerError?.message === 'string' ? providerError.message : typeof body?.error === 'string' ? body.error : '';
+  } catch {}
+  // Accept fixed provider identifiers only. Unknown codes may themselves contain secrets.
+  const providerCode = PROVIDER_CODES.has(providerError?.code) ? providerError.code
+    : PROVIDER_CODES.has(providerError?.type) ? providerError.type : undefined;
+  const quotaStatus = [400, 402, 429].includes(response.status);
+  const quotaCode = providerCode && Object.hasOwn(QUOTA_MESSAGES, providerCode) ? providerCode : undefined;
+  // Message fallback serves compatible providers without structured identifiers.
+  // Incidental phrases such as "credit balance" never establish a billing failure.
+  const hasStructuredIdentity = providerError && (providerError.code != null || providerError.type != null);
+  const legacyQuota = !hasStructuredIdentity && /insufficient[_ -]quota|quota[_ -]exceeded|insufficient[_ -](?:balance|credit)|payment[_ -]required/.test(legacyDetail);
   let message = 'پردازش سرویس هوش مصنوعی ناموفق بود؛ کمی بعد دوباره تلاش کنید.', code = 'UPSTREAM_FAILED', status = 502;
   let unsupportedParameter;
   if ([400, 403].includes(response.status) && /unsupported_country|country[_ -]not[_ -]supported|region[_ -]not[_ -]supported|unsupported[_ -](?:country|region|territory)/.test(detail)) {
     message = 'این سرویس درخواست را به دلیل محدودیت کشور یا منطقه نپذیرفت؛ مدیر باید وضعیت دسترسی حساب و سرویس را بررسی کند.'; code = 'AI_REGION_UNSUPPORTED';
   } else if ([401, 403].includes(response.status)) {
     message = 'کلید سرویس هوش مصنوعی معتبر نیست یا به این مدل دسترسی ندارد؛ مدیر اتصال و مجوز کلید را بررسی کند.'; code = 'AI_AUTH_FAILED';
-  } else if (response.status === 402 || /insufficient[_ -]quota|quota[_ -]exceeded|insufficient[_ -](?:balance|credit)|payment[_ -]required|credit balance/.test(detail)) {
-    message = 'اعتبار حساب سرویس هوش مصنوعی کافی نیست؛ مدیر موجودی یا سقف مصرف حساب را بررسی کند.'; code = 'AI_QUOTA_EXCEEDED'; status = 503;
+  } else if (response.status === 429 && providerCode === 'rate_limit_exceeded') {
+    message = 'سرویس هوش مصنوعی درخواست‌های زیادی دریافت کرده؛ کمی بعد دوباره تلاش کنید.'; code = 'UPSTREAM_RATE_LIMITED'; status = 429;
+  } else if (quotaStatus && (response.status === 402 || quotaCode || legacyQuota)) {
+    message = QUOTA_MESSAGES[quotaCode || 'insufficient_quota']; code = 'AI_QUOTA_EXCEEDED'; status = 503;
   } else if (response.status === 429) {
     message = 'سرویس هوش مصنوعی درخواست‌های زیادی دریافت کرده؛ کمی بعد دوباره تلاش کنید.'; code = 'UPSTREAM_RATE_LIMITED'; status = 429;
   } else if (response.status === 404 || /model[_ -]not[_ -]found|model.{0,60}(?:does not exist|not available|not supported|unknown)/.test(detail)) {
@@ -87,6 +115,7 @@ async function providerFailure(response, service) {
   }
   const error = new VoiceError(message, status, code);
   error.providerStatus = response.status;
+  if (providerCode) error.providerCode = providerCode;
   if (unsupportedParameter) error.unsupportedParameter = unsupportedParameter;
   return error;
 }
@@ -222,7 +251,7 @@ export async function testAIConnection({ config, fetcher = fetch }) {
   const outcome = async (task, successMessage) => {
     try { await task(); return { ok: true, message: successMessage }; }
     catch (error) {
-      return { ok: false, code: error instanceof VoiceError ? error.code : 'UPSTREAM_UNAVAILABLE', message: error instanceof VoiceError ? error.message : 'بررسی سرویس انجام نشد؛ دوباره تلاش کنید.', ...(Number.isInteger(error?.providerStatus) ? { providerStatus: error.providerStatus } : {}) };
+      return { ok: false, code: error instanceof VoiceError ? error.code : 'UPSTREAM_UNAVAILABLE', message: error instanceof VoiceError ? error.message : 'بررسی سرویس انجام نشد؛ دوباره تلاش کنید.', ...(Number.isInteger(error?.providerStatus) ? { providerStatus: error.providerStatus } : {}), ...(PROVIDER_CODES.has(error?.providerCode) ? { providerCode: error.providerCode } : {}) };
     }
   };
   const chat = await outcome(() => requestAIJSON({ config, fetcher, maxTokens: 32, timeoutMs: 20000, messages: [{ role: 'system', content: 'Return only the JSON object {"ok":true}.' }, { role: 'user', content: 'Connection test. No user data is included.' }] }), 'مدل گفت‌وگو به آزمون کوتاه پاسخ داد');
