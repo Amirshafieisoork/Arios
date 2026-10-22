@@ -14,7 +14,7 @@ function fixture() {
   let state = createSeedState();
   const settings = new Map([['integrations', { aiBaseUrl: 'https://api.avalai.ir/v1', aiApiKey: KEY, aiModel: 'gpt-4o-mini', transcriptionModel: 'whisper-1', telegramBotToken: TOKEN, botId: '123456', botUsername: 'AriosTestBot' }]]);
   const drafts = new Map(), links = new Map(), codes = new Map(), updates = new Map(), objects = new Map();
-  const mock = { fetchCalls: [], extractionFailure: false, telegramFailure: null, incoming: [], storageDeletes: [], signedPaths: [], downloadCount: 0, rateAllowed: true };
+  const mock = { fetchCalls: [], extractionFailure: false, telegramFailure: null, incoming: [], storageDeletes: [], signedPaths: [], playbackSigns: [], storageWrites: [], downloadCount: 0, rateAllowed: true };
   let locked = false;
   const repo = {
     async loadState() { return { state: clone(state), revision: 1 }; },
@@ -34,6 +34,7 @@ function fixture() {
     async pendingTelegramDrafts(limit) { return [...drafts.values()].filter(row => row.source === 'telegram' && row.status === 'pending').slice(0, limit).map(clone); },
     async expiredUploadDrafts(before) { return [...drafts.values()].filter(row => row.source === 'upload' && !row.transcript && ['pending', 'failed'].includes(row.status) && row.created_at < before).map(clone); },
     async completedUploadDrafts(before) { return [...drafts.values()].filter(row => row.source === 'upload' && row.transcript && row.storage_path && row.created_at < before).map(clone); },
+    async expiredAudioDrafts(before) { return [...drafts.values()].filter(row => ['upload', 'telegram'].includes(row.source) && row.storage_path && row.created_at < before && (row.status !== 'processing' || row.claim_until < Date.now())).map(clone); },
     async listTelegramLinks(userId = null) { return [...links.values()].filter(row => !userId || row.user_id === userId).map(clone); },
     async getTelegramLink(id) { return clone(links.get(String(id)) ?? null); },
     async createLinkCode(value) { for (const [key, row] of codes) if (row.userId === value.userId) codes.delete(key); codes.set(value.codeHash, clone(value)); },
@@ -47,6 +48,8 @@ function fixture() {
   };
   const bucket = {
     async createSignedUploadUrl(path, options) { assert.equal(options.upsert, false); mock.signedPaths.push(path); return { data: { path, token: 'signed-test-token', signedUrl: 'https://dedicated.supabase.co/storage/v1/object/upload/sign/arios-audio/' + path + '?token=signed-test-token' }, error: null }; },
+    async createSignedUrl(path, seconds) { mock.playbackSigns.push({ path, seconds }); return { data: { signedUrl: 'https://dedicated.supabase.co/storage/v1/object/sign/arios-audio/' + path + '?token=read-test-token' }, error: null }; },
+    async upload(path, blob, options) { assert.equal(options.upsert, false); if (objects.has(path)) return { error: { statusCode: '409' } }; objects.set(path, { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: options.contentType }); mock.storageWrites.push(path); return { data: { path }, error: null }; },
     async info(path) { const value = objects.get(path); return value ? { data: { size: value.bytes.byteLength, contentType: value.mimeType }, error: null } : { data: null, error: { message: 'Not found' } }; },
     async download(path) { mock.downloadCount++; const value = objects.get(path); return value ? { data: new Blob([value.bytes], { type: value.mimeType }), error: null } : { data: null, error: {} }; },
     async remove(paths) { for (const path of paths) { objects.delete(path); mock.storageDeletes.push(path); } return { data: [], error: null }; },
@@ -109,7 +112,8 @@ test('signed upload is owner-scoped, bounded, private and finalized from the sto
   f.objects.set(row.storage_path, { bytes: OGG, mimeType: 'audio/ogg' });
   const completed = await f.call('/api/voice/upload-complete', { id: row.id }, 'worker');
   assert.equal(completed.status, 200); assert.equal(completed.data.status, 'ready'); assert.equal(completed.data.fields.projectId, 'p1');
-  assert.equal(f.objects.has(row.storage_path), false); assert.equal(f.drafts.get(row.id).transcript, TRANSCRIPT);
+  assert.equal(f.objects.has(row.storage_path), true); assert.equal(f.drafts.get(row.id).transcript, TRANSCRIPT);
+  assert.equal(completed.data.audio.available, true);
   for (const key of ['source_metadata', 'storage_path', 'file_id', 'claim']) assert.equal(key in completed.data, false);
   assert.equal((await f.call('/api/voice/upload-url', { fileName: 'a.ogg', mimeType: 'audio/ogg', size: 20 * 1024 * 1024 + 1 }, 'worker')).status, 413);
 });
@@ -128,13 +132,13 @@ test('upload finalization verifies actual server size and ownership before provi
   assert.equal(wrongType.data.status, 'failed'); assert.match(wrongType.data.error, /صوتی/);
 });
 
-test('transcript checkpoint survives extraction failure and retry does not re-transcribe deleted audio', async () => {
+test('transcript checkpoint survives extraction failure and retry does not re-transcribe the retained original', async () => {
   const f = fixture();
   const signed = await f.call('/api/voice/upload-url', { fileName: 'a.ogg', mimeType: 'audio/ogg', size: 8, projectId: 'p1' }, 'worker');
   const row = f.drafts.get(signed.data.draftId); f.objects.set(row.storage_path, { bytes: OGG, mimeType: 'audio/ogg' });
   f.mock.extractionFailure = true;
   const failed = await f.call('/api/voice/upload-complete', { id: row.id }, 'worker');
-  assert.equal(failed.data.status, 'failed'); assert.equal(failed.data.transcript, TRANSCRIPT); assert.equal(f.objects.has(row.storage_path), false);
+  assert.equal(failed.data.status, 'failed'); assert.equal(failed.data.transcript, TRANSCRIPT); assert.equal(f.objects.has(row.storage_path), true);
   f.mock.extractionFailure = false;
   const ready = await f.call('/api/voice/retry', { id: row.id }, 'worker');
   assert.equal(ready.data.status, 'ready'); assert.equal(f.mock.fetchCalls.filter(call => call.url.pathname.endsWith('/audio/transcriptions')).length, 1); assert.equal(f.mock.downloadCount, 1);
@@ -171,12 +175,80 @@ test('customers cannot use voice APIs; workers cannot manage integration or sync
   assert.equal((await f.call('/api/voice/upload-url', { fileName: 'a.ogg', mimeType: 'audio/ogg', size: 8, projectId: 'p4' }, 'worker')).status, 403);
 });
 
-test('raw uploads expire and completed signed paths are purged after token expiry without deleting transcripts', async () => {
+test('private upload and Telegram audio expire after seven days while recent completed audio and transcripts remain', async () => {
   const f = fixture();
   await f.repo.createDraft({ id: 'old-upload', userId: 'worker', source: 'upload', storagePath: 'voice/worker/old-upload.ogg', createdAt: new Date(Date.now() - 8 * 86400000).toISOString() });
   await f.repo.createDraft({ id: 'completed-upload', userId: 'worker', source: 'upload', status: 'ready', transcript: TRANSCRIPT, storagePath: 'voice/worker/completed-upload.ogg', createdAt: new Date(Date.now() - 4 * 3600000).toISOString() });
+  await f.repo.createDraft({ id: 'old-telegram', userId: 'worker', source: 'telegram', status: 'ready', transcript: TRANSCRIPT, fileId: 'old-file', storagePath: 'voice/worker/old-telegram.ogg', createdAt: new Date(Date.now() - 8 * 86400000).toISOString() });
   f.objects.set('voice/worker/old-upload.ogg', { bytes: OGG, mimeType: 'audio/ogg' }); f.objects.set('voice/worker/completed-upload.ogg', { bytes: OGG, mimeType: 'audio/ogg' });
+  f.objects.set('voice/worker/old-telegram.ogg', { bytes: OGG, mimeType: 'audio/ogg' });
   await f.call('/api/voice');
   assert.equal(f.drafts.get('old-upload').status, 'failed'); assert.equal(f.drafts.get('old-upload').storage_path, null);
-  assert.equal(f.drafts.get('completed-upload').transcript, TRANSCRIPT); assert.equal(f.drafts.get('completed-upload').status, 'ready'); assert.equal(f.drafts.get('completed-upload').storage_path, null); assert.equal(f.objects.size, 0);
+  assert.equal(f.drafts.get('completed-upload').transcript, TRANSCRIPT); assert.equal(f.drafts.get('completed-upload').status, 'ready'); assert.equal(f.drafts.get('completed-upload').storage_path, 'voice/worker/completed-upload.ogg');
+  assert.equal(f.drafts.get('old-telegram').storage_path, null); assert.equal(f.drafts.get('old-telegram').transcript, TRANSCRIPT); assert.equal(f.objects.size, 1);
+});
+
+test('audio playback requires ownership or manager access and never leaks private file identifiers or credentials', async () => {
+  const f = fixture();
+  await f.repo.createDraft({ id: 'play-upload', userId: 'worker', source: 'upload', status: 'failed', storagePath: 'voice/worker/play-upload.ogg', sourceMetadata: { expected_size: OGG.byteLength, mime_type: 'audio/ogg', file_name: 'voice.ogg' } });
+  f.objects.set('voice/worker/play-upload.ogg', { bytes: OGG, mimeType: 'audio/ogg' });
+  for (const who of ['customer', 'worker2']) {
+    const forbidden = await f.call('/api/voice/audio', { id: 'play-upload' }, who);
+    assert.equal(forbidden.status, 403); assert.equal(f.mock.playbackSigns.length, 0); assert.equal(f.mock.downloadCount, 0);
+  }
+  for (const who of ['worker', 'manager']) {
+    const played = await f.call('/api/voice/audio', { id: 'play-upload', path: 'other-user/secret.ogg' }, who);
+    assert.equal(played.status, 200); assert.match(played.data.url, /\/object\/sign\/arios-audio\/voice\/worker\/play-upload\.ogg\?token=/);
+    assert.equal(played.data.mimeType, 'audio/ogg'); assert.equal(played.data.fileName, 'voice.ogg');
+    assert.ok(Date.parse(played.data.expiresAt) > Date.now());
+    assert.equal(JSON.stringify(played.data).includes(KEY), false); assert.equal(JSON.stringify(played.data).includes(TOKEN), false);
+  }
+  assert.ok(f.mock.playbackSigns.every(item => item.seconds > 0 && item.seconds <= 300));
+  assert.equal(f.mock.downloadCount, 0, 'signing an existing audio object must not download its bytes into the API');
+  const listed = await f.call('/api/voice', undefined, 'worker');
+  const view = listed.data.drafts.find(item => item.id === 'play-upload');
+  assert.equal(view.audio.available, true);
+  for (const secret of ['read-test-token', 'voice/worker/play-upload.ogg', TOKEN, KEY]) assert.equal(JSON.stringify(listed.data).includes(secret), false);
+});
+
+test('existing Telegram drafts cache the original once and can play without an AI configuration', async () => {
+  const f = fixture();
+  f.settings.set('integrations', { telegramBotToken: TOKEN });
+  await f.repo.createDraft({ id: 'telegram_88', userId: 'worker', source: 'telegram', status: 'failed', fileId: 'private-telegram-file', sourceMetadata: { expected_size: OGG.byteLength } });
+  const first = await f.call('/api/voice/audio', { id: 'telegram_88' }, 'worker');
+  assert.equal(first.status, 200); assert.equal(f.objects.has('voice/worker/telegram_88.ogg'), true);
+  assert.deepEqual(f.mock.storageWrites, ['voice/worker/telegram_88.ogg']);
+  assert.equal(first.data.url.includes(TOKEN), false); assert.equal(first.data.url.includes('api.telegram.org'), false);
+  const callsBefore = f.mock.fetchCalls.length;
+  const second = await f.call('/api/voice/audio', { id: 'telegram_88' });
+  assert.equal(second.status, 200); assert.equal(f.mock.fetchCalls.length, callsBefore);
+  assert.equal(f.mock.fetchCalls.some(item => /audio\/transcriptions|chat\/completions/.test(item.url.pathname)), false);
+  assert.equal(f.drafts.get('telegram_88').status, 'failed', 'playback does not change report processing status');
+});
+
+test('expired, textual, missing and corrupt audio cannot receive a playback URL', async () => {
+  const f = fixture();
+  await f.repo.createDraft({ id: 'expired-telegram', userId: 'worker', source: 'telegram', fileId: 'expired-file', createdAt: new Date(Date.now() - 8 * 86400000).toISOString() });
+  await f.repo.createDraft({ id: 'text-only', userId: 'worker', source: 'text', transcript: TRANSCRIPT });
+  await f.repo.createDraft({ id: 'bad-path', userId: 'worker', source: 'upload', storagePath: 'voice/worker2/bad-path.ogg' });
+  await f.repo.createDraft({ id: 'missing-file', userId: 'worker', source: 'upload', storagePath: 'voice/worker/missing-file.ogg' });
+  assert.equal((await f.call('/api/voice/audio', { id: 'expired-telegram' }, 'worker')).status, 410);
+  assert.equal((await f.call('/api/voice/audio', { id: 'text-only' }, 'worker')).status, 404);
+  assert.equal((await f.call('/api/voice/audio', { id: 'bad-path' }, 'worker')).status, 400);
+  assert.equal((await f.call('/api/voice/audio', { id: 'missing-file' }, 'worker')).status, 404);
+  assert.equal(f.mock.fetchCalls.length, 0); assert.equal(f.mock.playbackSigns.length, 0);
+});
+
+test('playback links never outlive retention and reject unexpected signing destinations', async () => {
+  const f = fixture();
+  await f.repo.createDraft({ id: 'nearly-expired', userId: 'worker', source: 'upload', storagePath: 'voice/worker/nearly-expired.ogg', createdAt: new Date(Date.now() - 7 * 86400000 + 120000).toISOString(), sourceMetadata: { expected_size: OGG.byteLength, mime_type: 'audio/ogg', file_name: 'voice.ogg' } });
+  f.objects.set('voice/worker/nearly-expired.ogg', { bytes: OGG, mimeType: 'audio/ogg' });
+  const signed = await f.call('/api/voice/audio', { id: 'nearly-expired' }, 'worker');
+  assert.equal(signed.status, 200); assert.ok(f.mock.playbackSigns[0].seconds > 0 && f.mock.playbackSigns[0].seconds <= 120);
+  const bucket = f.supabase.storage.from('arios-audio');
+  for (const url of ['https://external.example/audio?token=private', 'https://dedicated.supabase.co/storage/v1/object/sign/arios-audio/voice/worker2/private.ogg?token=private']) {
+    bucket.createSignedUrl = async () => ({ data: { signedUrl: url }, error: null });
+    const invalid = await f.call('/api/voice/audio', { id: 'nearly-expired' }, 'worker');
+    assert.equal(invalid.status, 503); assert.equal(invalid.data.code, 'AUDIO_URL_FAILED'); assert.equal(JSON.stringify(invalid.data).includes('private'), false);
+  }
 });

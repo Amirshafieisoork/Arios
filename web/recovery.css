@@ -1,0 +1,1 @@
+.auth-form-wrap>button.auth-back,#recovery-form button.auth-back{border:0;background:transparent;padding:14px 0;color:var(--gold-dark);text-align:right}#recovery-form h3{color:var(--ink);margin-bottom:12px}#recovery-form [data-recovery-message]{margin:16px 0;min-height:24px}#recovery-form [role="alert"]{color:#a33e32}

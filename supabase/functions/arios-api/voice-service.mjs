@@ -2,6 +2,8 @@ import { applyAction, publicState, projectAccess, DomainError } from './domain.m
 import { transcribeAudio, extractReport, fetchTelegramUpdates, downloadTelegramVoice, MAX_AUDIO_BYTES } from './voice-core.mjs';
 
 const BUCKET = 'arios-audio';
+const AUDIO_RETENTION_MS = 7 * 86400000;
+const PLAYBACK_URL_SECONDS = 300;
 const now = () => new Date().toISOString();
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new DomainError(message, status, code); };
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' } });
@@ -12,7 +14,13 @@ const canVoice = user => { if (!user || !['manager', 'worker'].includes(user.rol
 const tehranDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))).map(value => value.toString(16).padStart(2, '0')).join('');
 const parseObject = value => { if (object(value)) return value; try { const parsed = JSON.parse(value || '{}'); return object(parsed) ? parsed : {}; } catch { return {}; } };
-const draftView = row => ({ id: row.id, userId: row.user_id, source: row.source, status: row.status, transcript: row.transcript || '', fields: parseObject(row.fields), error: row.error || null, reportId: row.report_id || null, createdAt: row.created_at });
+const audioDeadline = row => Date.parse(row.created_at) + AUDIO_RETENTION_MS;
+const audioView = row => {
+  const deadline = audioDeadline(row), metadata = parseObject(row.source_metadata);
+  const sourceExists = row.source === 'telegram' ? Boolean(row.file_id || row.storage_path) : row.source === 'upload' && Boolean(row.storage_path);
+  return { available: Boolean(sourceExists && Number.isFinite(deadline) && deadline > Date.now()), expiresAt: Number.isFinite(deadline) && row.source !== 'text' ? new Date(deadline).toISOString() : null, mimeType: sourceExists ? metadata.mime_type || (row.source === 'telegram' ? 'audio/ogg' : null) : null };
+};
+const draftView = row => ({ id: row.id, userId: row.user_id, source: row.source, status: row.status, transcript: row.transcript || '', fields: parseObject(row.fields), error: row.error || null, audio: audioView(row), reportId: row.report_id || null, createdAt: row.created_at });
 
 async function bytesFromStream(stream, limit) {
   if (!stream) return new Uint8Array();
@@ -97,36 +105,68 @@ function uploadMetadata(payload) {
   return { file_name: fileName, mime_type: types[extension], expected_size: payload.size, extension, upload_expires_at: new Date(Date.now() + 2 * 3600000).toISOString() };
 }
 
-async function storedAudio(supabase, row) {
-  const metadata = parseObject(row.source_metadata);
+function audioStoragePath(row) {
   // Never accept a caller-supplied path. Every object belongs to one persisted draft and owner.
+  if (![row.user_id, row.id].every(value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,120}$/.test(value))) fail('فایل این پیش‌نویس معتبر نیست.', 400, 'INVALID_AUDIO_PATH');
   const prefix = `voice/${row.user_id}/${row.id}.`;
-  if (typeof row.storage_path !== 'string' || !row.storage_path.startsWith(prefix) || !/\.(?:ogg|oga|opus|mp3|m4a|mp4|wav|webm|mpeg|flac)$/.test(row.storage_path)) fail('فایل این پیش‌نویس معتبر نیست؛ دوباره بارگذاری کنید.', 400, 'UPLOAD_REQUIRED');
+  if (typeof row.storage_path !== 'string' || !row.storage_path.startsWith(prefix) || !/^(?:ogg|oga|opus|mp3|m4a|mp4|wav|webm|mpeg|flac)$/.test(row.storage_path.slice(prefix.length))) fail('فایل این پیش‌نویس معتبر نیست؛ دوباره بارگذاری کنید.', 400, 'UPLOAD_REQUIRED');
+  return row.storage_path;
+}
+
+async function audioInfo(supabase, row) {
+  const metadata = parseObject(row.source_metadata);
+  const path = audioStoragePath(row);
   const bucket = supabase.storage.from(BUCKET);
-  const { data: info, error: infoError } = await bucket.info(row.storage_path);
-  if (infoError || !info) fail('فایل هنوز بارگذاری نشده یا در دسترس نیست؛ بارگذاری را دوباره انجام دهید.', 409, 'UPLOAD_NOT_FOUND');
+  const { data: info, error: infoError } = await bucket.info(path);
+  if (infoError || !info) fail('فایل صوتی در دسترس نیست؛ اگر بارگذاری کامل شده، فایل را دوباره انتخاب کنید.', 404, 'AUDIO_NOT_AVAILABLE');
   const actualSize = Number(info.size ?? info.metadata?.size);
   if (!Number.isSafeInteger(actualSize) || actualSize < 1 || actualSize > MAX_AUDIO_BYTES || actualSize !== metadata.expected_size) fail('حجم فایل بارگذاری‌شده با درخواست اولیه یکسان نیست.', 413, 'UPLOAD_SIZE_MISMATCH');
   const observedType = String(info.contentType || info.mimetype || info.metadata?.mimetype || '').split(';')[0].toLowerCase();
   if (observedType && !/^(?:audio\/(?:ogg|opus|mpeg|mp3|mp4|x-m4a|wav|x-wav|webm|flac|x-flac)|video\/(?:mp4|webm)|application\/(?:ogg|octet-stream))$/.test(observedType)) fail('نوع فایل بارگذاری‌شده صوتی نیست.', 415, 'UNSUPPORTED_AUDIO');
-  const { data: blob, error } = await bucket.download(row.storage_path);
+  return { bucket, actualSize, path, metadata };
+}
+
+async function storedAudio(supabase, row) {
+  const { bucket, actualSize, path, metadata } = await audioInfo(supabase, row);
+  const { data: blob, error } = await bucket.download(path);
   if (error || !blob || blob.size !== actualSize || blob.size > MAX_AUDIO_BYTES) fail('دریافت فایل صوتی کامل نشد؛ دوباره تلاش کنید.', 502, 'UPLOAD_DOWNLOAD_FAILED');
   return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: metadata.mime_type, fileName: metadata.file_name };
 }
 
+function retainedAudio(row) {
+  if (row.source === 'text') fail('این پیش‌نویس از متن ساخته شده و فایل صوتی ندارد.', 404, 'AUDIO_NOT_AVAILABLE');
+  if (!Number.isFinite(audioDeadline(row)) || audioDeadline(row) <= Date.now()) fail('مهلت هفت‌روزهٔ نگه‌داری صوت پایان یافته است؛ متن و گزارش همچنان در دسترس‌اند.', 410, 'AUDIO_EXPIRED');
+}
+
+async function cacheTelegramAudio({ repo, supabase, row, config, fetcher, claim }) {
+  retainedAudio(row);
+  if (row.storage_path) return { row, audio: await storedAudio(supabase, row) };
+  if (!config.telegramBotToken || !row.file_id) fail('فایل تلگرام در دسترس نیست؛ اتصال بات را بررسی کنید.', 404, 'AUDIO_NOT_AVAILABLE');
+  const metadata = parseObject(row.source_metadata);
+  const audio = await downloadTelegramVoice({ token: config.telegramBotToken, fileId: row.file_id, fileSize: metadata.expected_size, fetcher });
+  if (!(audio.bytes instanceof Uint8Array) || audio.bytes.byteLength < 1 || audio.bytes.byteLength > MAX_AUDIO_BYTES) fail('حجم صوت تلگرام معتبر نیست.', 413, 'AUDIO_TOO_LARGE');
+  const extension = audio.fileName?.split('.').at(-1)?.toLowerCase();
+  const path = `voice/${row.user_id}/${row.id}.${extension}`;
+  audioStoragePath({ ...row, storage_path: path });
+  const { error } = await supabase.storage.from(BUCKET).upload(path, new Blob([audio.bytes], { type: audio.mimeType }), { contentType: audio.mimeType, cacheControl: '300', upsert: false });
+  // Concurrent readers may have cached this same immutable Telegram file first.
+  if (error && !['409', 'Duplicate', 'ResourceAlreadyExists'].includes(String(error.statusCode || error.code))) fail('ذخیرهٔ خصوصی صوت انجام نشد؛ دوباره تلاش کنید.', 503, 'AUDIO_CACHE_FAILED');
+  const updated = await repo.updateDraft(row.id, { storage_path: path, source_metadata: { ...metadata, expected_size: audio.bytes.byteLength, mime_type: audio.mimeType, file_name: audio.fileName, audio_cached_at: now() } }, claim === undefined ? {} : { claim });
+  if (!updated) fail('اطلاعات ویس هم‌زمان تغییر کرد؛ دوباره تلاش کنید.', 409, 'DRAFT_CONFLICT');
+  await audioInfo(supabase, updated);
+  return { row: updated, audio };
+}
+
 async function cleanupAudio(repo, supabase) {
-  if (!repo.expiredUploadDrafts || !repo.completedUploadDrafts) return;
-  const [expired, completed] = await Promise.all([
-    repo.expiredUploadDrafts(new Date(Date.now() - 7 * 86400000).toISOString(), 20),
-    // Signed upload tokens expire after two hours; a buffer prevents recreation after this cleanup.
-    repo.completedUploadDrafts(new Date(Date.now() - 3 * 3600000).toISOString(), 20),
-  ]);
-  for (const row of [...completed, ...expired]) {
+  if (!repo.expiredAudioDrafts) return;
+  const expired = await repo.expiredAudioDrafts(new Date(Date.now() - AUDIO_RETENTION_MS).toISOString(), 40);
+  for (const row of expired) {
     if (row.storage_path) {
-      const removed = await supabase.storage.from(BUCKET).remove([row.storage_path]);
+      let path; try { path = audioStoragePath(row); } catch { continue; }
+      const removed = await supabase.storage.from(BUCKET).remove([path]);
       if (removed.error) continue;
     }
-    await repo.updateDraft(row.id, { storage_path: null, ...(!row.transcript ? { status: 'failed', error: 'مهلت نگه‌داری فایل گذشت؛ فایل را دوباره بارگذاری کنید.' } : {}) });
+    await repo.updateDraft(row.id, { storage_path: null, source_metadata: { ...parseObject(row.source_metadata), audio_expired_at: now() }, ...(!row.transcript ? { status: 'failed', error: 'مهلت نگه‌داری فایل گذشت؛ فایل را دوباره بارگذاری کنید.' } : {}) });
   }
 }
 
@@ -159,14 +199,17 @@ export async function processDraft({ repo, supabase, id, fetcher = fetch, env = 
     const projects = snapshot.projects.filter(project => user.role === 'manager' || project.memberIds.includes(user.id)).map(({ id, name }) => ({ id, name }));
     let transcript = row.transcript || '';
     if (!transcript) {
-      const audio = row.source === 'telegram'
-        ? await downloadTelegramVoice({ token: config.telegramBotToken, fileId: row.file_id, fetcher: boundedFetcher })
-        : await storedAudio(supabase, row);
+      let audio;
+      if (row.source === 'telegram') {
+        const cached = await cacheTelegramAudio({ repo, supabase, row, config, fetcher: boundedFetcher, claim });
+        row = cached.row; audio = cached.audio;
+      } else { retainedAudio(row); audio = await storedAudio(supabase, row); }
       transcript = await transcribeAudio({ ...audio, config, fetcher: boundedFetcher });
       const stored = await repo.updateDraft(id, { transcript }, { claim });
       if (!stored) return draftView(await repo.getDraft(id));
-      // Transcript is durable before removing the raw upload; an extraction retry needs no new upload.
-      if (row.source === 'upload' && row.storage_path) await supabase.storage.from(BUCKET).remove([row.storage_path]).catch(() => {});
+      row = stored;
+      // Keep the private original for playback until the seven-day retention deadline.
+      // Retried extraction still uses the durable transcript rather than transcribing again.
     }
     const previous = parseObject(row.fields);
     const scopedProjects = previous.projectId ? projects.filter(project => project.id === previous.projectId) : projects;
@@ -228,7 +271,7 @@ export async function syncTelegram({ repo, supabase, fetcher = fetch, env = {} }
 
 /** Called only after Edge authentication and origin checks; no unauthenticated sync bypass. */
 export async function handleVoice({ path, request, supabase, repo, user, fetcher = fetch, env = {} }) {
-  const paths = new Set(['/api/voice', '/api/integrations', '/api/telegram/link', '/api/telegram/unlink', '/api/telegram/sync', '/api/voice/text', '/api/voice/retry', '/api/voice/submit', '/api/voice/upload-url', '/api/voice/upload-complete']);
+  const paths = new Set(['/api/voice', '/api/integrations', '/api/telegram/link', '/api/telegram/unlink', '/api/telegram/sync', '/api/voice/text', '/api/voice/retry', '/api/voice/submit', '/api/voice/upload-url', '/api/voice/upload-complete', '/api/voice/audio']);
   if (!paths.has(path)) return null;
   canVoice(user);
   if (path === '/api/voice' && request.method === 'GET') {
@@ -241,6 +284,24 @@ export async function handleVoice({ path, request, supabase, repo, user, fetcher
   }
   if (request.method !== 'POST') return json({ error: 'روش درخواست مجاز نیست.', code: 'METHOD_NOT_ALLOWED' }, 405);
   const payload = await readJSON(request);
+  if (path === '/api/voice/audio') {
+    await rate(repo, `voice-audio:${user.id}`, 30);
+    let row = await draftFor(repo, payload.id, user);
+    retainedAudio(row);
+    if (row.source === 'telegram' && !row.storage_path) row = (await cacheTelegramAudio({ repo, supabase, row, config: await getConfig(repo, env), fetcher })).row;
+    const { bucket, path: audioPath, metadata } = await audioInfo(supabase, row);
+    const ttl = Math.min(PLAYBACK_URL_SECONDS, Math.floor((audioDeadline(row) - Date.now()) / 1000));
+    if (ttl < 1) fail('مهلت هفت‌روزهٔ نگه‌داری صوت پایان یافته است.', 410, 'AUDIO_EXPIRED');
+    const { data, error } = await bucket.createSignedUrl(audioPath, ttl);
+    let url;
+    try {
+      url = new URL(data?.signedUrl);
+      if (url.protocol !== 'https:' || !url.hostname.endsWith('.supabase.co') || url.pathname !== `/storage/v1/object/sign/${BUCKET}/${audioPath}` || !url.searchParams.get('token')) throw Error();
+      if (supabase.supabaseUrl && url.origin !== new URL(supabase.supabaseUrl).origin) throw Error();
+    } catch { fail('آماده‌سازی پخش صوت انجام نشد؛ دوباره تلاش کنید.', 503, 'AUDIO_URL_FAILED'); }
+    if (error) fail('آماده‌سازی پخش صوت انجام نشد؛ دوباره تلاش کنید.', 503, 'AUDIO_URL_FAILED');
+    return json({ url: url.toString(), expiresAt: new Date(Date.now() + ttl * 1000).toISOString(), mimeType: metadata.mime_type || 'audio/ogg', fileName: metadata.file_name || 'arios-voice.ogg' });
+  }
   if (path === '/api/integrations') {
     manager(user); await rate(repo, `integrations:${user.id}`, 10);
     const current = await getConfig(repo, env);

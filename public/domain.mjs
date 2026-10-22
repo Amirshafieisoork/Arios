@@ -1,3 +1,4 @@
+import { normalizePhone, normalizeUsername, internalAuthEmail } from './identity.mjs';
 /** ARIOS domain. All amounts are whole toman; elapsed work is integer minutes. */
 export class DomainError extends Error {
   constructor(message, status = 400, code = 'INVALID_INPUT') {
@@ -6,7 +7,7 @@ export class DomainError extends Error {
 }
 
 const copy = value => structuredClone(value);
-const allowedRoles = new Set(['manager', 'worker', 'customer']);
+const allowedRoles = new Set(['manager', 'worker', 'customer', 'warehouse', 'accountant']);
 const arrayNames = ['users', 'projects', 'reports', 'materials', 'invoices', 'messages', 'tickets', 'inventory', 'receipts', 'audit'];
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new DomainError(message, status, code); };
 const now = () => new Date().toISOString();
@@ -55,14 +56,14 @@ function find(list, value, label) {
 function getUser(state, userOrId) {
   const userId = typeof userOrId === 'object' ? userOrId?.id : userOrId;
   const user = state.users.find(user => user.id === userId);
-  if (!user || !allowedRoles.has(user.role)) fail('برای ادامه وارد حساب خود شوید.', 401, 'UNAUTHENTICATED');
+  if (!user || user.deletedAt || !allowedRoles.has(user.role)) fail('برای ادامه وارد حساب خود شوید.', 401, 'UNAUTHENTICATED');
   return user;
 }
 export function projectAccess(state, userOrId, projectId) {
   const userId = typeof userOrId === 'object' ? userOrId?.id : userOrId;
   const user = state.users.find(item => item.id === userId);
   const project = state.projects.find(item => item.id === projectId);
-  if (!user || !project) return false;
+  if (!user || user.deletedAt || !project) return false;
   return user.role === 'manager' || (user.role === 'customer' && project.customerId === user.id) || (user.role === 'worker' && project.memberIds.includes(user.id));
 }
 function requireProject(state, user, projectId) {
@@ -70,11 +71,28 @@ function requireProject(state, user, projectId) {
   return state.projects.find(project => project.id === projectId);
 }
 function manager(user) { if (user.role !== 'manager') fail('این عملیات فقط برای مدیر مجاز است.', 403, 'FORBIDDEN'); }
+function roleAllowed(user, roles) { if (!roles.includes(user.role)) fail('دسترسی این عملیات برای حساب شما فعال نیست.', 403, 'FORBIDDEN'); }
+function inventoryProject(state, user, projectId) {
+  roleAllowed(user, ['manager', 'warehouse', 'worker']);
+  return user.role === 'worker' ? requireProject(state, user, projectId) : find(state.projects, projectId, 'پروژه');
+}
+function financialProject(state, user, projectId) {
+  roleAllowed(user, ['manager', 'accountant']);
+  return find(state.projects, projectId, 'پروژه');
+}
+function safeMaterial(material, showPrices = false, showInventory = false) {
+  const item = pick(material, ['id', 'projectId', 'name', 'quantity', 'originalQuantity', 'returnedQuantity', 'unit', 'clientVisible', 'date', 'recordedBy', 'createdAt']);
+  if (showPrices) Object.assign(item, pick(material, ['unitPrice']));
+  if (showInventory) Object.assign(item, pick(material, ['inventoryId']));
+  item.returns = (material.returns || []).map(entry => pick(entry, ['id', 'quantity', 'date', 'note', 'recordedBy', 'createdAt']));
+  return item;
+}
 function audit(state, actor, action, entity, description) {
   state.audit.push({ id: id('a'), actorId: actor.id, action, entityId: entity.id, createdAt: now(), description });
 }
 function safeUser(user, includeRates = false) {
-  const result = pick(user, ['id', 'name', 'email', 'role', 'department', 'skill']);
+  const result = pick(user, ['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'deletedAt']);
+  if (internalAuthEmail(result.email)) delete result.email;
   if (includeRates) Object.assign(result, pick(user, ['hourlyRate', 'rateHistory']));
   return result;
 }
@@ -95,43 +113,54 @@ export function publicState(state, userId) {
   const user = getUser(state, userId);
   const isManager = user.role === 'manager';
   const isWorker = user.role === 'worker';
-  const projects = state.projects.filter(project => projectAccess(state, user, project.id));
+  const isWarehouse = user.role === 'warehouse';
+  const isAccountant = user.role === 'accountant';
+  const finance = isManager || isAccountant;
+  const stockManager = isManager || isWarehouse;
+  const projects = state.projects.filter(project => isWarehouse || isAccountant || projectAccess(state, user, project.id));
   const projectIds = new Set(projects.map(project => project.id));
   const scoped = list => list.filter(item => projectIds.has(item.projectId));
-  const tickets = scoped(state.tickets);
-  const messages = scoped(state.messages).filter(message => user.role !== 'customer' || !message.internal);
+  const tickets = isWarehouse || isAccountant ? [] : scoped(state.tickets);
+  const messages = isWarehouse || isAccountant ? [] : scoped(state.messages).filter(message => user.role !== 'customer' || !message.internal);
   const contactIds = new Set([user.id]);
-  for (const project of projects) {
+  if (!isWarehouse && !isAccountant) for (const project of projects) {
     for (const memberId of project.memberIds || []) contactIds.add(memberId);
     for (const contactId of project.contactIds || []) contactIds.add(contactId);
     if (project.customerId) contactIds.add(project.customerId);
   }
+  for (const material of scoped(state.materials)) {
+    if (material.recordedBy) contactIds.add(material.recordedBy);
+    for (const returned of material.returns || []) if (returned.recordedBy) contactIds.add(returned.recordedBy);
+  }
   for (const message of messages) contactIds.add(message.authorId);
   for (const ticket of tickets) { contactIds.add(ticket.authorId); for (const reply of ticket.replies || []) contactIds.add(reply.authorId); }
-  for (const person of state.users) if (person.role === 'manager') contactIds.add(person.id);
+  if (!isWarehouse && !isAccountant) for (const person of state.users) if (person.role === 'manager') contactIds.add(person.id);
   const result = {
-    user: safeUser(user, isManager),
-    users: state.users.filter(person => isManager || contactIds.has(person.id)).map(person => safeUser(person, isManager)),
+    user: safeUser(user, finance),
+    users: state.users.filter(person => finance || contactIds.has(person.id)).map(person => {
+      if (person.id === user.id || isManager) return safeUser(person, finance);
+      if (isWarehouse) return pick(person, ['id', 'name', 'role', 'deletedAt']);
+      if (isAccountant) return pick(person, ['id', 'name', 'role', 'hourlyRate', 'rateHistory', 'deletedAt']);
+      return safeUser(person);
+    }),
     projects: projects.map(project => {
-      const item = pick(project, ['id', 'name', 'type', 'customerId', 'memberIds', 'contactIds', 'location', 'status', 'progress', 'startDate', 'endDate', 'description', 'phases', 'cover', 'clientNote']);
-      if (isManager) {
+      if (isWarehouse) return pick(project, ['id', 'name', 'type', 'status']);
+      const item = pick(project, isAccountant ? ['id', 'name', 'type', 'customerId', 'memberIds', 'status', 'progress', 'startDate', 'endDate', 'cover'] : ['id', 'name', 'type', 'customerId', 'memberIds', 'contactIds', 'location', 'status', 'progress', 'startDate', 'endDate', 'description', 'phases', 'cover', 'clientNote']);
+      if (finance) {
         Object.assign(item, pick(project, ['budget', 'contractAmount']));
+        if (isManager) Object.assign(item, pick(project, ['publicVisible', 'publicTitle', 'publicSummary']));
         item.laborCost = state.reports.filter(report => report.projectId === project.id && report.status === 'approved').reduce((sum, report) => sum + report.laborCost, 0);
       } else if (!isWorker) Object.assign(item, pick(project, ['contractAmount']));
       return item;
     }),
-    reports: user.role === 'customer' ? [] : scoped(state.reports).filter(report => isManager || report.workerId === user.id).map(report => safeReport(report, isManager)),
-    materials: scoped(state.materials).filter(material => user.role !== 'customer' || material.clientVisible).map(material => {
-      const item = pick(material, ['id', 'projectId', 'name', 'quantity', 'unit', 'clientVisible', 'date']);
-      if (!isWorker) Object.assign(item, pick(material, ['unitPrice']));
-      if (isManager) Object.assign(item, pick(material, ['inventoryId']));
-      return item;
-    }),
-    invoices: isWorker ? [] : scoped(state.invoices).map(invoice => pick(invoice, ['id', 'projectId', 'title', 'amount', 'paid', 'dueDate', 'status'])),
+    reports: user.role === 'customer' || isWarehouse ? [] : scoped(state.reports).filter(report => finance || report.workerId === user.id).map(report => safeReport(report, finance)),
+    materials: scoped(state.materials).filter(material => user.role !== 'customer' || material.clientVisible).map(material => safeMaterial(material, !isWorker, stockManager || isWorker)),
+    invoices: isWorker || isWarehouse ? [] : scoped(state.invoices).map(invoice => pick(invoice, ['id', 'projectId', 'title', 'amount', 'paid', 'dueDate', 'status'])),
     messages: messages.map(safeMessage),
     tickets: tickets.map(safeTicket),
-    inventory: isManager ? state.inventory.map(item => pick(item, ['id', 'name', 'unit', 'quantity', 'minQuantity', 'unitPrice'])) : [],
-    receipts: isWorker ? [] : scoped(state.receipts).map(receipt => pick(receipt, ['id', 'invoiceId', 'projectId', 'amount', 'reference', 'method', 'recordedBy', 'createdAt'])),
+    inventory: stockManager || isAccountant ? state.inventory.map(item => pick(item, ['id', 'name', 'unit', 'quantity', 'minQuantity', 'unitPrice'])) : [],
+    stockCatalog: isWorker ? state.inventory.map(item => pick(item, ['id', 'name', 'unit', 'quantity'])) : [],
+    receipts: isWorker || isWarehouse ? [] : scoped(state.receipts).map(receipt => pick(receipt, ['id', 'invoiceId', 'projectId', 'amount', 'reference', 'method', 'recordedBy', 'createdAt'])),
     audit: isManager ? state.audit.map(entry => pick(entry, ['id', 'actorId', 'action', 'entityId', 'createdAt', 'description'])) : [],
   };
   return result;
@@ -163,41 +192,112 @@ export function applyAction(state, userId, action, payload = {}) {
     const name = text(payload.name, 'نام پروژه', { max: 160 });
     const type = text(payload.type, 'نوع پروژه', { max: 80 });
     const customerId = payload.customerId || null;
-    if (customerId && find(draft.users, customerId, 'مشتری').role !== 'customer') fail('حساب انتخابی مشتری نیست.');
+    if (customerId && (() => { const person = find(draft.users, customerId, 'مشتری'); return person.deletedAt || person.role !== 'customer'; })()) fail('حساب انتخابی مشتری نیست.');
     if (!Array.isArray(payload.memberIds) || payload.memberIds.some(memberId => typeof memberId !== 'string')) fail('اعضای پروژه معتبر نیستند.');
     const memberIds = [...new Set(payload.memberIds)];
-    for (const memberId of memberIds) if (find(draft.users, memberId, 'نیرو').role !== 'worker') fail('فقط نیروی اجرایی به پروژه تخصیص دهید.');
+    for (const memberId of memberIds) if ((() => { const person = find(draft.users, memberId, 'نیرو'); return person.deletedAt || person.role !== 'worker'; })()) fail('فقط نیروی اجرایی به پروژه تخصیص دهید.');
     const startDate = isoDate(payload.startDate, 'تاریخ شروع');
     const endDate = isoDate(payload.endDate, 'تاریخ پایان');
     if (endDate < startDate) fail('پایان پروژه نباید پیش از شروع باشد.');
     const cover = /event|مراسم|همایش/i.test(type) ? 'event' : /electric|برق/i.test(type) ? 'electric' : /media|رسانه/i.test(type) ? 'media' : 'building';
-    result = { id: id('p'), name, type, customerId, memberIds, location: text(payload.location, 'موقعیت', { max: 240 }), status: 'active', progress: 0, budget: integer(payload.budget, 'بودجه'), contractAmount: integer(payload.contractAmount, 'مبلغ قرارداد'), startDate, endDate, description: text(payload.description, 'شرح پروژه', { optional: true }), phases: ['برنامه‌ریزی', 'اجرا', 'آزمایش و تحویل'].map(name => ({ id: id('ph'), name, progress: 0 })), cover, clientNote: '' };
+    result = { id: id('p'), name, type, customerId, memberIds, location: text(payload.location, 'موقعیت', { max: 240 }), status: 'active', progress: 0, budget: integer(payload.budget, 'بودجه'), contractAmount: integer(payload.contractAmount, 'مبلغ قرارداد'), startDate, endDate, description: text(payload.description, 'شرح پروژه', { optional: true }), phases: ['برنامه‌ریزی', 'اجرا', 'آزمایش و تحویل'].map(name => ({ id: id('ph'), name, progress: 0 })), cover, clientNote: '', publicVisible: bool(payload.publicVisible), publicTitle: text(payload.publicTitle, 'عنوان عمومی', { optional: true, max: 160 }), publicSummary: text(payload.publicSummary, 'شرح عمومی', { optional: true, max: 1000 }) };
     draft.projects.push(result); audit(draft, user, action, result, 'پروژه ایجاد شد.');
   } else if (action === 'project.update') {
     manager(user);
     const project = find(draft.projects, payload.id, 'پروژه');
     if (payload.customerId !== undefined) {
       const customerId = payload.customerId === null || payload.customerId === '' ? null : text(payload.customerId, 'مشتری', { max: 100 });
-      if (customerId && find(draft.users, customerId, 'مشتری').role !== 'customer') fail('حساب انتخابی مشتری نیست.');
+      if (customerId && (() => { const person = find(draft.users, customerId, 'مشتری'); return person.deletedAt || person.role !== 'customer'; })()) fail('حساب انتخابی مشتری نیست.');
       project.customerId = customerId;
     }
     if (payload.memberIds !== undefined) {
       if (!Array.isArray(payload.memberIds) || payload.memberIds.some(memberId => typeof memberId !== 'string')) fail('اعضای پروژه معتبر نیستند.');
       const memberIds = [...new Set(payload.memberIds)];
-      for (const memberId of memberIds) if (find(draft.users, memberId, 'نیرو').role !== 'worker') fail('فقط نیروی اجرایی به پروژه تخصیص دهید.');
+      for (const memberId of memberIds) if ((() => { const person = find(draft.users, memberId, 'نیرو'); return person.deletedAt || person.role !== 'worker'; })()) fail('فقط نیروی اجرایی به پروژه تخصیص دهید.');
       project.memberIds = memberIds;
     }
     if (payload.progress !== undefined) project.progress = integer(payload.progress, 'پیشرفت', 0, 100);
     if (payload.status !== undefined) project.status = choice(payload.status, ['active', 'attention', 'completed'], 'وضعیت پروژه');
     if (payload.clientNote !== undefined) project.clientNote = text(payload.clientNote, 'یادداشت مشتری', { optional: true });
+    if (payload.publicVisible !== undefined) project.publicVisible = bool(payload.publicVisible);
+    if (payload.publicTitle !== undefined) project.publicTitle = text(payload.publicTitle, 'عنوان عمومی', { optional: true, max: 160 });
+    if (payload.publicSummary !== undefined) project.publicSummary = text(payload.publicSummary, 'شرح عمومی', { optional: true, max: 1000 });
     result = project; audit(draft, user, action, project, 'اطلاعات پروژه به‌روزرسانی شد.');
+  } else if (action === 'account.update') {
+    manager(user);
+    const person = find(draft.users, text(payload.id, 'شناسه حساب', { max: 120 }), 'حساب');
+    if (person.deletedAt) fail('پیش از ویرایش، حساب حذف‌شده را بازیابی کنید.', 409, 'ACCOUNT_ARCHIVED');
+    if (payload.password !== undefined && payload.password !== '') fail('تغییر رمز را جدا از ویرایش اطلاعات حساب انجام دهید.');
+    if (payload.name !== undefined) person.name = text(payload.name, 'نام', { max: 120 });
+    if (payload.phone !== undefined) {
+      let phone;
+      try { phone = normalizePhone(payload.phone); } catch { fail('شماره تماس معتبر نیست.', 400, 'INVALID_PHONE'); }
+      const duplicate = draft.users.some(other => { try { return other.id !== person.id && other.phone && normalizePhone(other.phone) === phone; } catch { return false; } });
+      if (duplicate) fail('این شماره تماس برای حساب دیگری ثبت شده است.', 409, 'DUPLICATE_PHONE');
+      person.phone = phone;
+    }
+    if (payload.username !== undefined) {
+      let username = '';
+      try { username = payload.username === '' ? '' : normalizeUsername(payload.username); } catch { fail('نام کاربری معتبر نیست.', 400, 'INVALID_USERNAME'); }
+      if (username && draft.users.some(other => other.id !== person.id && other.username && normalizeUsername(other.username) === username)) fail('این نام کاربری قبلاً ثبت شده است.', 409, 'DUPLICATE_USERNAME');
+      if (username) person.username = username; else delete person.username;
+    }
+    if (payload.department !== undefined) person.department = text(payload.department, 'واحد', { optional: true, max: 100 });
+    if (payload.skill !== undefined) person.skill = text(payload.skill, 'مهارت', { optional: true, max: 200 });
+    const requestedRole = payload.role === undefined ? person.role : payload.role;
+    if (person.role === 'manager' && requestedRole !== 'manager') fail('نقش مدیر اصلی از این فرم تغییر نمی‌کند.', 403, 'MANAGER_ROLE_PROTECTED');
+    if (person.role !== 'manager' && !['worker', 'customer', 'warehouse', 'accountant'].includes(requestedRole)) fail('نقش حساب معتبر نیست.');
+    if (requestedRole === 'warehouse' && !person.username) fail('برای انباردار نام کاربری مجزا ثبت کنید.', 400, 'USERNAME_REQUIRED');
+    const projectIds = payload.projectIds ?? [];
+    if (!Array.isArray(projectIds) || projectIds.length > 100 || projectIds.some(value => typeof value !== 'string') || new Set(projectIds).size !== projectIds.length) fail('فهرست پروژه‌ها معتبر نیست.');
+    const selectedProjects = projectIds.map(value => find(draft.projects, value, 'پروژه'));
+    const warnings = [];
+    if (requestedRole === 'worker') {
+      if (person.hourlyRate === undefined) person.hourlyRate = 0;
+      if (!Array.isArray(person.rateHistory)) person.rateHistory = [];
+      for (const project of draft.projects) {
+        if (project.customerId === person.id) { project.customerId = null; project.memberIds = [...new Set([...(project.memberIds || []), person.id])]; }
+      }
+      for (const project of selectedProjects) project.memberIds = [...new Set([...(project.memberIds || []), person.id])];
+    } else if (requestedRole === 'customer') {
+      const candidates = new Set(selectedProjects.map(project => project.id));
+      for (const project of draft.projects) {
+        if ((project.memberIds || []).includes(person.id)) candidates.add(project.id);
+        project.memberIds = (project.memberIds || []).filter(value => value !== person.id);
+      }
+      for (const project of draft.projects.filter(project => candidates.has(project.id))) {
+        if (!project.customerId || project.customerId === person.id) project.customerId = person.id;
+        else warnings.push(`پروژهٔ «${project.name}» مشتری دیگری دارد؛ نقش حساب تغییر کرد و مشتری پروژه دست‌نخورده ماند.`);
+      }
+    }
+    if (['warehouse', 'accountant'].includes(requestedRole)) for (const project of draft.projects) {
+      project.memberIds = (project.memberIds || []).filter(value => value !== person.id);
+      if (project.customerId === person.id) project.customerId = null;
+      project.contactIds = (project.contactIds || []).filter(value => value !== person.id);
+    }
+    person.role = requestedRole;
+    result = { ...safeUser(person, true), warnings };
+    audit(draft, user, action, person, 'اطلاعات تماس و نقش حساب به‌روزرسانی شد.');
+  } else if (action === 'account.archive' || action === 'account.restore') {
+    manager(user);
+    const person = find(draft.users, text(payload.id, 'شناسه حساب', { max: 120 }), 'حساب');
+    if (person.id === user.id || person.role === 'manager') fail('حساب مدیر از این بخش حذف نمی‌شود.', 403, 'MANAGER_ROLE_PROTECTED');
+    if (action === 'account.archive') {
+      person.deletedAt ||= now();
+    } else {
+      if (person.phone && draft.users.some(other => other.id !== person.id && !other.deletedAt && other.phone && normalizePhone(other.phone) === normalizePhone(person.phone))) fail('شماره تماس برای حساب فعال دیگری ثبت شده است.', 409, 'DUPLICATE_PHONE');
+      if (person.username && draft.users.some(other => other.id !== person.id && !other.deletedAt && other.username && normalizeUsername(other.username) === normalizeUsername(person.username))) fail('نام کاربری برای حساب فعال دیگری ثبت شده است.', 409, 'DUPLICATE_USERNAME');
+      delete person.deletedAt;
+    }
+    result = safeUser(person, true);
+    audit(draft, user, action, person, action === 'account.archive' ? 'حساب از کاربران فعال حذف شد؛ سوابق حفظ شد.' : 'دسترسی حساب بازیابی شد.');
   } else if (action === 'report.create') {
     if (!['worker', 'manager'].includes(user.role)) fail('ثبت گزارش برای این حساب مجاز نیست.', 403, 'FORBIDDEN');
     const project = requireProject(draft, user, payload.projectId);
     if (user.role === 'worker' && payload.workerId !== undefined && payload.workerId !== user.id) fail('گزارش را فقط برای خود ثبت کنید.', 403, 'FORBIDDEN');
     const workerId = user.role === 'worker' ? user.id : payload.workerId;
     const worker = find(draft.users, workerId, 'نیروی اجرایی');
-    if (worker.role !== 'worker' || !project.memberIds.includes(worker.id)) fail('نیروی انتخابی عضو این پروژه نیست.', 403, 'FORBIDDEN');
+    if (worker.deletedAt || worker.role !== 'worker' || !project.memberIds.includes(worker.id)) fail('نیروی انتخابی عضو این پروژه نیست.', 403, 'FORBIDDEN');
     const date = isoDate(payload.date);
     const start = clock(payload.start); const end = clock(payload.end);
     if (end <= start) fail('ساعت پایان باید پس از ساعت شروع باشد.');
@@ -217,7 +317,7 @@ export function applyAction(state, userId, action, payload = {}) {
     if (payload.workerId !== undefined && payload.workerId !== report.workerId) fail('نیروی گزارش قابل تغییر نیست.', 403, 'FORBIDDEN');
     const project = requireProject(draft, user, payload.projectId);
     const worker = find(draft.users, report.workerId, 'نیروی اجرایی');
-    if (worker.role !== 'worker' || !project.memberIds.includes(worker.id)) fail('نیروی انتخابی عضو این پروژه نیست.', 403, 'FORBIDDEN');
+    if (worker.deletedAt || worker.role !== 'worker' || !project.memberIds.includes(worker.id)) fail('نیروی انتخابی عضو این پروژه نیست.', 403, 'FORBIDDEN');
     const date = isoDate(payload.date);
     const start = clock(payload.start), end = clock(payload.end);
     if (end <= start) fail('ساعت پایان باید پس از ساعت شروع باشد.');
@@ -248,6 +348,41 @@ export function applyAction(state, userId, action, payload = {}) {
     report.laborCost = status === 'approved' ? roundedLabor(report.rate, report.minutes) : 0;
     report.version += 1;
     result = report; audit(draft, user, action, report, status === 'approved' ? 'گزارش تأیید شد.' : 'گزارش بررسی شد.');
+  } else if (action === 'material.consume') {
+    const project = inventoryProject(draft, user, payload.projectId);
+    const stock = find(draft.inventory, payload.inventoryId, 'کالای انبار');
+    // Inventory identity and price always come from canonical stock, never the browser.
+    for (const key of ['name', 'unit', 'unitPrice']) if (payload[key] !== undefined) fail('مشخصات و بهای کالای انبار از اطلاعات ثبت‌شده خوانده می‌شود.');
+    if (user.role === 'worker' && payload.clientVisible !== undefined && payload.clientVisible !== false) fail('انتشار هزینه برای مشتری فقط توسط مسئول مجاز است.', 403, 'FORBIDDEN');
+    const amount = quantity(payload.quantity), date = isoDate(payload.date);
+    const available = Math.round(stock.quantity * 1000), consumed = Math.round(amount * 1000);
+    if (consumed > available) fail('موجودی انبار کافی نیست.', 409, 'INSUFFICIENT_STOCK');
+    if (!Number.isSafeInteger(Math.round(amount * stock.unitPrice))) fail('هزینه کالا از محدوده مجاز بیشتر است.');
+    stock.quantity = (available - consumed) / 1000;
+    const material = { id: id('m'), projectId: project.id, inventoryId: stock.id, name: stock.name, quantity: amount, originalQuantity: amount, returnedQuantity: 0, returns: [], unit: stock.unit, unitPrice: stock.unitPrice, clientVisible: user.role === 'worker' ? false : bool(payload.clientVisible), date, recordedBy: user.id, createdAt: now() };
+    draft.materials.push(material); audit(draft, user, action, material, 'برداشت کالا از انبار برای پروژه ثبت شد.');
+    result = safeMaterial(material, user.role !== 'worker', true);
+  } else if (action === 'material.return') {
+    roleAllowed(user, ['manager', 'warehouse', 'worker']);
+    const material = find(draft.materials, payload.id, 'مصرف کالا');
+    inventoryProject(draft, user, material.projectId);
+    if (!material.inventoryId) fail('برای قلم مستقل از انبار، برگشت موجودی ثبت نمی‌شود.', 409, 'NO_STOCK_SOURCE');
+    const stock = find(draft.inventory, material.inventoryId, 'کالای انبار');
+    if (stock.unit !== material.unit) fail('واحد کالای انبار با مصرف ثبت‌شده یکسان نیست.', 409, 'STOCK_UNIT_MISMATCH');
+    const amount = quantity(payload.quantity), returned = Math.round(amount * 1000), remaining = Math.round(material.quantity * 1000);
+    const date = isoDate(payload.date);
+    if (date < material.date) fail('تاریخ برگشت نباید پیش از مصرف باشد.');
+    if (returned > remaining) fail('مقدار برگشت از مصرف باقی‌مانده بیشتر است.', 409, 'EXCESS_RETURN');
+    const sum = Math.round(stock.quantity * 1000) + returned;
+    if (!Number.isSafeInteger(sum)) fail('موجودی از محدوده مجاز بیشتر است.');
+    material.originalQuantity ??= Math.round((material.quantity + (material.returnedQuantity || 0)) * 1000) / 1000;
+    material.returnedQuantity = (Math.round((material.returnedQuantity || 0) * 1000) + returned) / 1000;
+    material.quantity = (remaining - returned) / 1000;
+    material.returns ||= [];
+    material.returns.push({ id: id('mr'), quantity: amount, date, note: text(payload.note, 'یادداشت برگشت', { optional: true, max: 1000 }), recordedBy: user.id, createdAt: now() });
+    stock.quantity = sum / 1000;
+    audit(draft, user, action, material, 'برگشت کالا از پروژه به انبار ثبت شد.');
+    result = safeMaterial(material, user.role !== 'worker', true);
   } else if (action === 'material.create') {
     manager(user);
     const project = requireProject(draft, user, payload.projectId);
@@ -269,11 +404,11 @@ export function applyAction(state, userId, action, payload = {}) {
     result = { id: id('m'), projectId: project.id, name, quantity: amount, unit, unitPrice, clientVisible, date, ...(inventoryId ? { inventoryId } : {}) };
     draft.materials.push(result); audit(draft, user, action, result, 'مصرف کالا ثبت شد.');
   } else if (action === 'invoice.create') {
-    manager(user); const project = requireProject(draft, user, payload.projectId);
+    const project = financialProject(draft, user, payload.projectId);
     result = { id: id('i'), projectId: project.id, title: text(payload.title, 'عنوان صورت‌حساب', { max: 200 }), amount: integer(payload.amount, 'مبلغ صورت‌حساب', 1), paid: 0, dueDate: isoDate(payload.dueDate, 'سررسید'), status: 'issued' };
     draft.invoices.push(result); audit(draft, user, action, result, 'صورت‌حساب صادر شد.');
   } else if (action === 'payment.record') {
-    manager(user); const invoice = find(draft.invoices, payload.invoiceId, 'صورت‌حساب');
+    roleAllowed(user, ['manager', 'accountant']); const invoice = find(draft.invoices, payload.invoiceId, 'صورت‌حساب');
     const amount = integer(payload.amount, 'مبلغ دریافت', 1);
     const reference = text(payload.reference, 'شماره پیگیری', { max: 120 });
     if (draft.receipts.some(receipt => receipt.reference === reference)) fail('این شماره پیگیری قبلاً ثبت شده است.', 409, 'DUPLICATE_REFERENCE');
@@ -302,7 +437,7 @@ export function applyAction(state, userId, action, payload = {}) {
   } else if (action === 'worker.create') {
     manager(user); const email = text(payload.email, 'ایمیل کاری', { max: 254 }).toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail('ایمیل کاری معتبر نیست.');
-    if (draft.users.some(person => person.email.toLowerCase() === email)) fail('این ایمیل قبلاً ثبت شده است.', 409, 'DUPLICATE_EMAIL');
+    if (draft.users.some(person => typeof person.email === 'string' && person.email.toLowerCase() === email)) fail('این ایمیل قبلاً ثبت شده است.', 409, 'DUPLICATE_EMAIL');
     result = { id: id('u'), name: text(payload.name, 'نام نیرو', { max: 120 }), email, role: 'worker', department: text(payload.department, 'واحد', { optional: true, max: 100 }), skill: text(payload.skill, 'مهارت', { optional: true, max: 200 }), hourlyRate: 0, rateHistory: [] };
     draft.users.push(result); audit(draft, user, action, result, 'پرونده نیرو ایجاد شد؛ حساب ورود نیست.');
   } else if (action === 'worker.rate') {
@@ -319,11 +454,11 @@ export function applyAction(state, userId, action, payload = {}) {
     if (applicable) worker.hourlyRate = applicable.hourlyRate;
     result = safeUser(worker, true); audit(draft, user, action, worker, 'نرخ تاریخ‌دار نیرو ثبت شد.');
   } else if (action === 'inventory.create') {
-    manager(user);
+    roleAllowed(user, ['manager', 'warehouse']);
     result = { id: id('inv'), name: text(payload.name, 'نام کالا', { max: 160 }), unit: text(payload.unit, 'واحد', { max: 40 }), quantity: quantity(payload.quantity, 'موجودی اولیه', true), minQuantity: quantity(payload.minQuantity, 'حداقل موجودی', true), unitPrice: integer(payload.unitPrice, 'قیمت واحد') };
     draft.inventory.push(result); audit(draft, user, action, result, 'کالای جدید به انبار افزوده شد.');
   } else if (action === 'inventory.receive') {
-    manager(user); const stock = find(draft.inventory, payload.id, 'کالای انبار');
+    roleAllowed(user, ['manager', 'warehouse']); const stock = find(draft.inventory, payload.id, 'کالای انبار');
     const received = quantity(payload.quantity);
     const sum = Math.round(stock.quantity * 1000) + Math.round(received * 1000);
     if (!Number.isSafeInteger(sum)) fail('موجودی از محدوده مجاز بیشتر است.');

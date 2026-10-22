@@ -1,7 +1,9 @@
 // Operational screens. All requests go through the shared, scoped API adapter.
+import { portalNotifications } from './portal-workflows.mjs';
+import {allowedPortalPage,assignableRoles,roleLabels} from './access.mjs';
 const memories = new Map();
 const managerPages = new Set(['finance-admin', 'inventory', 'team', 'analytics']);
-const labels = { open: 'باز', in_progress: 'در حال رسیدگی', resolved: 'حل‌شده', submitted: 'در انتظار بررسی', approved: 'تأییدشده', changes_requested: 'نیازمند اصلاح', rejected: 'ردشده', manager: 'مدیر', worker: 'نیروی اجرایی', customer: 'مشتری' };
+const labels = { warehouse:'انباردار', accountant:'حسابدار', open: 'باز', in_progress: 'در حال رسیدگی', resolved: 'حل‌شده', submitted: 'در انتظار بررسی', approved: 'تأییدشده', changes_requested: 'نیازمند اصلاح', rejected: 'ردشده', manager: 'مدیر', worker: 'نیروی اجرایی', customer: 'مشتری' };
 const sum = (rows, field) => rows.reduce((total, row) => total + (Number(row[field]) || 0), 0);
 const byDate = rows => [...rows].sort((a, b) => String(b.createdAt || b.date || '').localeCompare(String(a.createdAt || a.date || '')));
 const list = value => Array.isArray(value) ? value : [];
@@ -11,11 +13,7 @@ function memory(page, state) {
   if (!memories.has(key)) memories.set(key, { projectId: '', conversations: new Map(), filter: 'all' });
   return memories.get(key);
 }
-function allowed(page, state) {
-  if (managerPages.has(page)) return state.user.role === 'manager';
-  if (page === 'reports') return state.user.role !== 'customer';
-  return true;
-}
+function allowed(page,state){return allowedPortalPage(page,state.user.role);}
 function empty(message, ctx) { return `<div class="empty-state"><p>${ctx.e(message)}</p></div>`; }
 function header(title, subtitle, actions, ctx) { return `<div class="page-heading"><div><p class="eyebrow">ARIOS WORKSPACE</p><h1>${ctx.e(title)}</h1><p class="muted">${ctx.e(subtitle)}</p></div><div class="page-actions">${actions || ''}</div></div>`; }
 function metric(label, value, detail, ctx) { return `<article class="card metric"><span class="muted">${ctx.e(label)}</span><strong>${value}</strong><small class="muted">${ctx.e(detail)}</small></article>`; }
@@ -29,8 +27,24 @@ function selection(state, page) {
   return m;
 }
 const projectRows = (rows, projectId) => list(rows).filter(row => !projectId || row.projectId === projectId);
-const userOptions = (users, ctx, role) => users.filter(u => !role || u.role === role).map(u => `<option value="${ctx.e(u.id)}">${ctx.e(u.name)}</option>`).join('');
+const userOptions = (users, ctx, role) => users.filter(u => !u.deletedAt && (!role || u.role === role)).map(u => `<option value="${ctx.e(u.id)}">${ctx.e(u.name)}</option>`).join('');
 function field(label, content) { return `<label>${label}${content}</label>`; }
+function contact(person, ctx) {
+  const phone = String(person.phone || '').trim();
+  if (phone) return `<a class="account-phone" dir="ltr" href="tel:${ctx.e(phone)}">${ctx.e(phone)}</a>`;
+  return '<span class="muted">شماره تماس ثبت نشده</span>';
+}
+function accountFields(person, ctx, { create = false } = {}) {
+  const role=person?.role || 'worker';
+  return `${field('نام و نام خانوادگی', `<input name="name" value="${ctx.e(person?.name || '')}" required maxlength="120" autocomplete="name">`)}${field('شماره تماس', `<input name="phone" type="tel" dir="ltr" inputmode="tel" value="${ctx.e(person?.phone || '')}" placeholder="۰۹۱۲۱۲۳۴۵۶۷" required maxlength="30" autocomplete="tel">`)}${field('نقش حساب', `<select name="role">${assignableRoles.map(value=>`<option value="${value}" ${role===value?'selected':''}>${ctx.e(roleLabels[value])}</option>`).join('')}</select>`)}${field('نام کاربری', `<input name="username" dir="ltr" value="${ctx.e(person?.username || '')}" minlength="3" maxlength="40" autocomplete="off" ${role==='warehouse'?'required':''}><small class="muted" data-username-note>برای انباردار الزامی؛ ۳ تا ۴۰ نویسه، با حرف شروع شود</small>`)}${create ? field('رمز عبور', '<input name="password" type="password" required minlength="6" maxlength="128" autocomplete="new-password"><small class="muted">حداقل ۶ نویسه؛ ترکیب خاصی اجباری نیست</small>') : ''}`;
+}
+function wireAccountFields(){
+  const form=document.querySelector('#modal-form'),role=form?.querySelector('[name="role"]'),username=form?.querySelector('[name="username"]');
+  if(!role||!username)return;
+  const update=()=>{username.required=role.value==='warehouse';};
+  role.addEventListener('change',update);update();
+}
+
 function formProject(state, ctx, selected) { return field('پروژه', `<select name="projectId" required>${selectProjects(state, ctx, selected, false)}</select>`); }
 function messageRows(rows, state, ctx) {
   return byDate(rows).map(m => `<article class="message-item"><div class="row between"><strong>${ctx.e(ctx.personName(m.authorId))}</strong><small class="muted">${ctx.e(ctx.date(m.createdAt))}</small></div><p class="pre-wrap">${ctx.e(m.text)}</p><div class="row between"><small class="muted">${ctx.e(ctx.projectName(m.projectId))}</small>${m.internal ? '<span class="badge">داخلی · تیم پروژه</span>' : '<span class="badge">قابل مشاهده برای مشتری</span>'}</div></article>`).join('') || empty('هنوز پیامی ثبت نشده است.', ctx);
@@ -44,17 +58,21 @@ function renderReports(state, ctx) {
     <section class="card"><div class="toolbar">${projectFilter(state, ctx, m.projectId)}<label>وضعیت<select data-report-filter><option value="all">همهٔ وضعیت‌ها</option>${['submitted','approved','changes_requested','rejected'].map(v => `<option value="${v}" ${m.filter === v ? 'selected' : ''}>${labels[v]}</option>`).join('')}</select></label></div>
     <div class="report-list">${byDate(rows).map(r => `<article class="list-item report-item"><div class="row between"><div><strong>${ctx.e(ctx.personName(r.workerId))}</strong><small class="muted"> · ${ctx.e(ctx.projectName(r.projectId))}</small></div>${ctx.badge(r.status)}</div><p class="pre-wrap">${ctx.e(r.description)}</p><p class="muted pre-wrap">خروجی: ${ctx.e(r.output || 'ثبت نشده')}</p><div class="row between"><span class="muted">${ctx.e(ctx.date(r.date))} · ${ctx.e(r.start)} تا ${ctx.e(r.end)} · ${ctx.e(ctx.n(r.minutes))} دقیقه · استراحت ${ctx.e(ctx.n(r.breakMinutes || 0))} دقیقه</span>${state.user.role === 'manager' ? `<strong>${ctx.money(r.laborCost || 0)}</strong>` : ''}</div>${r.reviewNote ? `<p class="review-note">یادداشت مدیر: ${ctx.e(r.reviewNote)}</p>` : ''}${['telegram','upload','text'].includes(r.source) ? `<p class="muted">منبع گزارش: ${ctx.e({telegram:'ویس تلگرام',upload:'فایل صوتی',text:'متن'}[r.source])}</p>` : ''}${r.status !== 'approved' && (state.user.role === 'manager' || r.workerId === state.user.id) ? `<button class="button secondary small" data-edit-report="${ctx.e(r.id)}">ویرایش و ارسال دوباره</button>` : ''}${state.user.role === 'manager' && r.status !== 'approved' ? `<div class="row"><button class="button primary small" data-review="${ctx.e(r.id)}" data-status="approved">تأیید گزارش</button><button class="button secondary small" data-review="${ctx.e(r.id)}" data-status="changes_requested">درخواست اصلاح</button><button class="button danger small" data-review="${ctx.e(r.id)}" data-status="rejected">رد گزارش</button></div>` : ''}</article>`).join('') || empty('گزارشی با این فیلتر وجود ندارد.', ctx)}</div></section>`;
 }
+function renderLaborCosts(state,ctx,projectId){
+  const reports=projectRows(state.reports,projectId).filter(r=>r.status==='approved');
+  return `<section class="card"><div class="card-head"><h2>کارکرد و دستمزد تأییدشده</h2><strong>${ctx.money(sum(reports,'laborCost'))}</strong></div><p class="muted">فقط گزارش‌های تأییدشده و نرخ قطعی همان گزارش در جمع هزینه منظور شده‌اند</p>${byDate(reports).map(r=>`<article class="list-item"><div class="row between"><strong>${ctx.e(ctx.personName(r.workerId))}</strong><strong>${ctx.money(r.laborCost||0)}</strong></div><small class="muted">${ctx.e(ctx.projectName(r.projectId))} · ${ctx.e(ctx.date(r.date))} · ${ctx.e(ctx.n(r.minutes))} دقیقه</small></article>`).join('')||empty('هنوز کارکرد تأییدشده‌ای ثبت نشده است',ctx)}</section>`;
+}
 function renderFinance(state, ctx) {
   const m = selection(state, 'finance');
   const invoices = projectRows(state.invoices, m.projectId);
   const receipts = projectRows(state.receipts, m.projectId);
   const materials = projectRows(state.materials, m.projectId);
-  const manager = state.user.role === 'manager';
-  if (state.user.role === 'worker') return empty('اطلاعات مالی برای این حساب در دسترس نیست.', ctx);
-  return `${header('مالی و صورت‌حساب‌ها', 'مبالغ به تومان هستند؛ رسیدها پس از دریافت وجه توسط مدیر ثبت می‌شوند.', manager ? '<button class="button primary" data-new-invoice>+ صورت‌حساب جدید</button>' : '', ctx)}
+  const manager = ['manager','accountant'].includes(state.user.role);
+  if (!['manager','accountant','customer'].includes(state.user.role)) return empty('اطلاعات مالی برای این حساب در دسترس نیست.', ctx);
+  return `${header('مالی و صورت‌حساب‌ها', 'مبالغ به تومان هستند؛ رسیدها پس از دریافت وجه توسط مدیر یا حسابدار ثبت می‌شوند.', manager ? '<button class="button primary" data-new-invoice>+ صورت‌حساب جدید</button>' : '', ctx)}
     <div class="grid metrics">${metric('مجموع صورت‌حساب‌ها', ctx.money(sum(invoices, 'amount')), 'صورت‌حساب‌های صادرشده', ctx)}${metric('پرداخت ثبت‌شده', ctx.money(sum(invoices, 'paid')), 'ثبت‌شده توسط مدیر', ctx)}${metric('ماندهٔ پرداخت', ctx.money(sum(invoices, 'amount') - sum(invoices, 'paid')), 'مبالغ تسویه‌نشده', ctx)}</div>
-    <section class="card"><div class="toolbar">${projectFilter(state, ctx, m.projectId)}</div><div class="notice">درگاه پرداخت آنلاین هنوز متصل نشده است. برای تسویه، از پیام پروژه با تیم هماهنگ کنید؛ مشتری نمی‌تواند پرداخت موفق ثبت کند.</div><div class="invoice-list">${invoices.map(i => `<article class="list-item"><div class="row between"><div><h3>${ctx.e(i.title)}</h3><small class="muted">${ctx.e(ctx.projectName(i.projectId))} · سررسید ${ctx.e(ctx.date(i.dueDate))}</small></div>${ctx.badge(i.status)}</div><div class="grid metrics"><div><small>مبلغ</small><strong>${ctx.money(i.amount)}</strong></div><div><small>پرداخت‌شده</small><strong>${ctx.money(i.paid)}</strong></div><div><small>مانده</small><strong>${ctx.money(i.amount - i.paid)}</strong></div></div>${manager && i.amount > i.paid ? `<button class="button primary small" data-receipt="${ctx.e(i.id)}">ثبت رسید دریافتی</button>` : ''}</article>`).join('') || empty('هنوز صورت‌حسابی صادر نشده است.', ctx)}</div></section>
-    <div class="grid two"><section class="card"><h2>تجهیزات مصرف‌شده</h2>${materials.map(item => `<div class="list-item"><div class="row between"><strong>${ctx.e(item.name)}</strong><span>${ctx.e(ctx.n(item.quantity))} ${ctx.e(item.unit)}</span></div><div class="row between"><small>${ctx.e(ctx.projectName(item.projectId))}${manager && !item.clientVisible ? ' · داخلی' : ''}</small><strong>${ctx.money(item.quantity * item.unitPrice)}</strong></div></div>`).join('') || empty('تجهیزات مصرفی ثبت نشده است.', ctx)}</section><section class="card"><h2>رسیدهای دریافت وجه</h2>${byDate(receipts).map(r => `<div class="list-item"><div class="row between"><strong>${ctx.money(r.amount)}</strong><small>${ctx.e(ctx.date(r.createdAt))}</small></div><p class="muted">شماره پیگیری: ${ctx.e(r.reference)}</p><small>${ctx.e(ctx.projectName(r.projectId))} · ثبت دستی توسط مدیر</small></div>`).join('') || empty('رسیدی برای این پروژه‌ها ثبت نشده است.', ctx)}</section></div>`;
+    <section class="card"><div class="toolbar">${projectFilter(state, ctx, m.projectId)}</div><div class="notice">دریافت وجه با رسید واقعی توسط مدیر یا حسابدار ثبت می‌شود. برای هماهنگی تسویه، از «هماهنگی پرداخت» در صورت‌حساب استفاده کنید؛ این صفحه درگاه بانکی نیست.</div><div class="invoice-list">${invoices.map(i => `<article class="list-item"><div class="row between"><div><h3>${ctx.e(i.title)}</h3><small class="muted">${ctx.e(ctx.projectName(i.projectId))} · سررسید ${ctx.e(ctx.date(i.dueDate))}</small></div>${ctx.badge(i.status)}</div><div class="grid metrics"><div><small>مبلغ</small><strong>${ctx.money(i.amount)}</strong></div><div><small>پرداخت‌شده</small><strong>${ctx.money(i.paid)}</strong></div><div><small>مانده</small><strong>${ctx.money(i.amount - i.paid)}</strong></div></div><div class="actions"><button class="button secondary small" data-invoice-details="${ctx.e(i.id)}">مشاهده و چاپ</button>${manager && i.amount > i.paid ? `<button class="button primary small" data-receipt="${ctx.e(i.id)}">ثبت رسید دریافتی</button>` : ''}${!manager && i.amount > i.paid ? `<button class="button primary small" data-coordinate-payment="${ctx.e(i.id)}">هماهنگی پرداخت</button>` : ''}</div></article>`).join('') || empty('هنوز صورت‌حسابی صادر نشده است.', ctx)}</div></section>
+    <div class="grid two"><section class="card"><h2>تجهیزات مصرف‌شده</h2>${materials.map(item => `<div class="list-item"><div class="row between"><strong>${ctx.e(item.name)}</strong><span>${ctx.e(ctx.n(item.quantity))} ${ctx.e(item.unit)}</span></div><div class="row between"><small>${ctx.e(ctx.projectName(item.projectId))}${manager && !item.clientVisible ? ' · داخلی' : ''}</small><strong>${ctx.money(item.quantity * item.unitPrice)}</strong></div></div>`).join('') || empty('تجهیزات مصرفی ثبت نشده است.', ctx)}</section><section class="card"><h2>رسیدهای دریافت وجه</h2>${byDate(receipts).map(r => `<div class="list-item"><div class="row between"><strong>${ctx.money(r.amount)}</strong><small>${ctx.e(ctx.date(r.createdAt))}</small></div><p class="muted">شماره پیگیری: ${ctx.e(r.reference)}</p><small>${ctx.e(ctx.projectName(r.projectId))} · ثبت دستی توسط مدیر</small></div>`).join('') || empty('رسیدی برای این پروژه‌ها ثبت نشده است.', ctx)}</section></div>`+(manager?renderLaborCosts(state,ctx,m.projectId):'');
 }
 function renderInventory(state, ctx) {
   const low = state.inventory.filter(i => i.quantity <= i.minQuantity);
@@ -67,20 +85,52 @@ function renderSupport(state, ctx) {
 }
 function conversation(state) {
   const m = memory('assistant', state);
-  if (!state.projects.some(p => p.id === m.projectId)) m.projectId = state.projects[0]?.id || '';
-  if (!m.conversations.has(m.projectId)) m.conversations.set(m.projectId, { messages: [], pending: false, ticketId: '', draft: '' });
+  if (m.projectId && !state.projects.some(p => p.id === m.projectId)) m.projectId = '';
+  if (!m.conversations.has(m.projectId)) m.conversations.set(m.projectId, { messages: [], pending: false, ticketId: '', draft: '', error: '' });
   return { m, chat: m.conversations.get(m.projectId) };
 }
 function renderAssistant(state, ctx) {
   const { m, chat } = conversation(state);
   const live = Boolean(ctx.capabilities?.ai) && !ctx.api.isStatic;
   const project = state.projects.find(p => p.id === m.projectId);
-  return `${header('دستیار هوشمند آریوس', live ? 'راهنمایی بر اساس اطلاعات مجاز پروژهٔ انتخاب‌شده' : 'اتصال هوش مصنوعی آماده نیست؛ مسئله را برای پشتیبانی ثبت کنید.', '', ctx)}<section class="card assistant-shell" data-assistant-user="${ctx.e(state.user.id)}" data-assistant-project="${ctx.e(m.projectId)}"><div class="toolbar"><label>پروژهٔ گفتگو<select data-ai-project>${selectProjects(state, ctx, m.projectId, false)}</select></label><span class="badge ${live ? 'success' : 'warning'}">${live ? 'هوش مصنوعی متصل است' : 'هوش مصنوعی متصل نیست'}</span></div>${project ? `<div class="notice">${ctx.e(project.name)} · پیشرفت ${ctx.e(ctx.n(project.progress))}٪ · اطلاعات هر پروژه در گفت‌وگوی مستقل نگهداری می‌شود.</div>` : empty('برای استفاده از پشتیبانی ابتدا باید به یک پروژه دسترسی داشته باشید.', ctx)}<div class="assistant-messages" aria-live="polite">${chat.messages.length ? chat.messages.map(msg => `<article class="chat-bubble ${msg.role === 'user' ? 'user' : 'assistant'}"><strong>${msg.role === 'user' ? 'شما' : 'دستیار آریوس'}</strong><p class="pre-wrap">${ctx.e(msg.content)}</p>${msg.sources?.length ? `<small class="muted">منابع: ${msg.sources.map(source => ctx.e(source.label)).join('، ')}</small>` : ''}</article>`).join('') : `<div class="assistant-welcome"><h2>${live ? 'چطور می‌توانم کمک کنم؟' : 'مسئلهٔ پروژه را برای ما بنویسید'}</h2><p class="muted">${live ? 'مشکل، نام تجهیز و اقداماتی را که انجام داده‌اید شرح دهید. اگر مسئله حل نشد، مکالمه به پشتیبانی ارجاع می‌شود.' : 'پس از ثبت تیکت، تیم پشتیبانی مسئله را بررسی می‌کند. در این حالت پاسخ هوش مصنوعی تولید نمی‌شود.'}</p></div>`}${chat.pending ? '<p class="muted" role="status">دستیار در حال بررسی مسئله است…</p>' : ''}</div>${chat.ticketId ? `<div class="notice success">تیکت پشتیبانی ${ctx.e(chat.ticketId)} ثبت شد. <button class="button secondary small" data-open-support>پیگیری تیکت</button></div>` : ''}<form data-ai-form><label>شرح مسئله<textarea name="message" rows="4" maxlength="8000" placeholder="مثلاً تصویر دوربین ورودی قطع شده؛ اتصال برق را بررسی کرده‌ام…" ${!project || chat.pending ? 'disabled' : ''}>${ctx.e(chat.draft)}</textarea></label><div class="row between"><small class="muted">${live ? 'برای پشتیبانی انسانی می‌توانید مکالمه را به تیکت تبدیل کنید.' : 'تیکت با همان شرح مسئله برای تیم پروژه ارسال می‌شود.'}</small><div class="row">${live ? `<button class="button primary" type="submit" ${!project || chat.pending ? 'disabled' : ''}>${chat.pending ? 'در حال بررسی…' : 'ارسال به دستیار'}</button>` : ''}<button class="button ${live ? 'secondary' : 'primary'}" type="button" data-ai-escalate ${!project || chat.pending || chat.ticketId ? 'disabled' : ''}>${chat.ticketId ? 'تیکت ثبت شده' : 'ثبت تیکت پشتیبانی'}</button></div></div></form></section>`;
+  const prompts = project ? ['وضعیت این پروژه را خلاصه کن', 'برای پیگیری مشکل چه اطلاعاتی لازم است؟', 'موارد باز این پروژه را مرور کن'] : ['آریوس چه خدماتی ارائه می‌دهد؟', 'چطور ویس را به گزارش کار تبدیل کنم؟', 'برای شروع پروژه چه اطلاعاتی آماده کنم؟'];
+  return `${header('دستیار آریوس', 'گفت‌وگوی عمومی و راهنمایی بر اساس اطلاعات مجاز پروژهٔ انتخاب‌شده', '', ctx)}
+    <section class="card assistant-shell" data-assistant-user="${ctx.e(state.user.id)}" data-assistant-project="${ctx.e(m.projectId)}">
+      <div class="toolbar"><label>موضوع گفتگو<select data-ai-project><option value="">گفت‌وگوی عمومی آریوس</option>${selectProjects(state, ctx, m.projectId, false)}</select></label><span class="badge ${live ? 'success' : 'warning'}">${live ? 'سرویس پیکربندی شده' : 'سرویس نیازمند تنظیم است'}</span><button class="button secondary small" type="button" data-ai-clear ${chat.pending || !chat.messages.length ? 'disabled' : ''}>گفت‌وگوی تازه</button></div>
+      <div class="notice">${project ? `${ctx.e(project.name)} · پیشرفت ${ctx.e(ctx.n(project.progress))}٪ · فقط اطلاعات مجاز همین پروژه در گفتگو استفاده می‌شود` : 'راهنمای خدمات و استفاده از آریوس؛ اطلاعات خصوصی پروژه‌ها در گفت‌وگوی عمومی استفاده نمی‌شود'}</div>
+      ${!live ? `<div class="notice assistant-connection-note">${state.user.role === 'manager' ? 'برای دریافت پاسخ، اتصال اختصاصی هوش مصنوعی را در <a class="text-link" href="#voice">تنظیم اتصال‌ها</a> تکمیل کنید' : 'مدیر باید اتصال اختصاصی هوش مصنوعی را تنظیم کند'}${project ? '؛ در این فاصله می‌توانید درخواست پشتیبانی ثبت کنید' : ''}</div>` : ''}
+      <div class="assistant-messages" aria-live="polite">${chat.messages.length ? chat.messages.map(msg => `<article class="chat-bubble ${msg.role === 'user' ? 'user' : 'assistant'}"><strong>${msg.role === 'user' ? 'شما' : 'دستیار آریوس'}</strong><p class="pre-wrap">${ctx.e(msg.content)}</p>${msg.sources?.length ? `<small class="muted">منابع: ${msg.sources.map(source => ctx.e(source.label)).join('، ')}</small>` : ''}</article>`).join('') : `<div class="assistant-welcome"><h2>چطور می‌توانم کمک کنم؟</h2><p class="muted">${project ? 'پرسش یا مسئلهٔ همین پروژه را بنویسید؛ گفتگو و ارجاع به پشتیبانی در همین زمینه باقی می‌ماند' : 'برای پرسش دربارهٔ خدمات، مسیر همکاری و استفاده از فضای کار، نیازی به ساخت پروژه نیست'}</p><div class="assistant-prompts">${prompts.map(prompt => `<button class="button secondary small" type="button" data-ai-prompt="${ctx.e(prompt)}">${ctx.e(prompt)}</button>`).join('')}</div></div>`}${chat.pending ? '<p class="assistant-loading" role="status">دستیار در حال آماده‌کردن پاسخ است…</p>' : ''}</div>
+      ${chat.error ? `<div class="assistant-error" role="alert"><p>${ctx.e(chat.error)}</p><span>متن پیام حفظ شده است</span><button class="button secondary small" type="button" data-ai-retry ${!live || chat.pending ? 'disabled' : ''}>تلاش دوباره</button></div>` : ''}
+      ${chat.ticketId ? `<div class="notice success">تیکت پشتیبانی ${ctx.e(chat.ticketId)} ثبت شد <button class="button secondary small" data-open-support>پیگیری تیکت</button></div>` : ''}
+      <form data-ai-form><label>پیام شما<textarea name="message" rows="4" maxlength="4000" placeholder="پرسش خود را بنویسید…" ${chat.pending ? 'disabled' : ''}>${ctx.e(chat.draft)}</textarea></label><div class="row between"><small class="muted">${project ? 'در صورت نیاز، همین گفتگو به تیکت پشتیبانی تبدیل می‌شود' : 'برای بررسی اطلاعات پروژه، آن را از فهرست بالا انتخاب کنید'}</small><div class="row"><button class="button primary" type="submit" ${!live || chat.pending ? 'disabled' : ''}>${chat.pending ? 'در حال پاسخ…' : 'ارسال پیام'}</button>${project ? `<button class="button secondary" type="button" data-ai-escalate ${chat.pending || chat.ticketId ? 'disabled' : ''}>${chat.ticketId ? 'تیکت ثبت شده' : 'ثبت تیکت پشتیبانی'}</button>` : ''}</div></div></form>
+    </section>`;
 }
+function renderNotifications(state, ctx) {
+  const items = portalNotifications(state), groups = [['report', 'گزارش منتظر بررسی'], ['review', 'گزارش نیازمند اصلاح'], ['ticket', 'درخواست پشتیبانی'], ['invoice', 'صورت‌حساب باز'], ['message', 'پیام پروژه']];
+  return `${header('مرکز پیگیری', 'موارد قابل پیگیری بر اساس وضعیت فعلی پروژه‌های مجاز شما', '', ctx)}<div class="grid metrics">${groups.filter(([kind]) => items.some(item => item.kind === kind)).map(([kind,label]) => metric(label, ctx.e(ctx.n(items.filter(item => item.kind === kind).length)), 'بر اساس اطلاعات فعلی فضای کار', ctx)).join('')}</div><section class="card notifications-list"><div class="card-head"><h2>پیگیری‌های پروژه</h2><span class="muted">حداکثر ۶۰ مورد اخیر</span></div>${items.map(item => `<a class="notification-item" href="${ctx.e(item.href)}"><span class="notification-kind">${ctx.icon({report:'reports',review:'reports',ticket:'support',invoice:'finance',message:'messages'}[item.kind])}</span><div><strong>${ctx.e(item.title)}</strong><p>${ctx.e(String(item.detail || '').slice(0, 300))}</p><small>${ctx.e(ctx.projectName(item.projectId))} · ${ctx.e(ctx.date(item.date))}</small></div><span aria-hidden="true">←</span></a>`).join('') || `<div class="empty-state"><h3>موردی برای پیگیری ندارید</h3><p>با ثبت پیام، درخواست، گزارش یا صورت‌حساب، موارد مرتبط در این صفحه قرار می‌گیرند</p><a class="button secondary" href="#projects">مشاهدهٔ پروژه‌ها</a></div>`}</section>`;
+}
+function accountActions(person,ctx){
+  if(!supabaseAuth(ctx)||person.role==='manager')return '';
+  const id=ctx.e(person.id);
+  return person.deletedAt ? `<button class="button secondary small" data-restore-account="${id}">بازگرداندن دسترسی</button>` : `<button class="button secondary small" data-edit-account="${id}">ویرایش اطلاعات و نقش</button><button class="button secondary small" data-reset-account="${id}">بازنشانی رمز</button><button class="button danger small" data-archive-account="${id}">حذف دسترسی</button>`;
+}
+function renderPasswordRequests(state,ctx){
+  if(!supabaseAuth(ctx))return '';
+  const m=memory('password-requests',state);
+  return `<section class="card" data-password-requests-user="${ctx.e(state.user.id)}"><div class="card-head"><div><h2>درخواست‌های بازیابی رمز</h2><p class="muted">پس از احراز هویت فرد، رمز تازه را تعیین و از مسیر مورد توافق به خود او اعلام کنید</p></div><button class="button secondary small" data-load-password-requests>تازه‌سازی درخواست‌ها</button></div><div data-password-request-list>${m.requests ? passwordRequestRows(m.requests,state,ctx) : '<p class="muted">برای مشاهده، درخواست‌ها را تازه‌سازی کنید</p>'}</div></section>`;
+}
+function passwordRequestRows(requests,state,ctx){
+  return requests.filter(r=>r.status==='pending'&&state.users.some(u=>u.id===r.userId&&!u.deletedAt)).map(r=>{
+    const person=state.users.find(u=>u.id===r.userId);
+    return `<article class="list-item"><div class="row between"><div><strong>${ctx.e(ctx.personName(r.userId))}</strong><p class="muted" dir="ltr">${ctx.e(r.identifier)}</p><small>${ctx.e(ctx.date(r.createdAt))}</small></div>${person.role==='manager'?'<p class="muted">حساب مالک محافظت شده است؛ بازیابی آن از <a class="text-link" href="https://supabase.com/dashboard/project/qategfabulrkvdckzmqp/auth/users" target="_blank" rel="noopener noreferrer">داشبورد رسمی احراز هویت</a> انجام می‌شود</p>':`<button class="button primary small" data-reset-account="${ctx.e(r.userId)}">تعیین رمز تازه</button>`}</div></article>`;
+  }).join('')||'<p class="muted">درخواست بازی در انتظار بررسی نیست</p>';
+}
+
 function renderTeam(state, ctx) {
-  const workers = state.users.filter(u => u.role === 'worker');
-  const hosted = Boolean(ctx.capabilities?.hosted) && !supabaseAuth(ctx);
-  return `${header('تیم و دسترسی‌ها', supabaseAuth(ctx) ? 'حساب‌های تیم و مشتریان، دسترسی پروژه و نرخ‌های تاریخ‌دار' : hosted ? 'نیروها، مشتریان، دسترسی با حساب ChatGPT و نرخ‌های تاریخ‌دار' : 'پروفایل نیروی اجرایی، حساب ورود مستقل و نرخ‌های تاریخ‌دار', `<button class="button secondary" data-new-profile>+ نیروی اجرایی</button><button class="button primary" data-new-account>${hosted ? '+ عضو یا مشتری' : '+ حساب ورود'}</button>`, ctx)}${!workers.length && !state.projects.length ? '<div class="notice">ابتدا نیروهای اجرایی و در صورت نیاز مشتری را ثبت کنید، سپس از <a class="text-link" href="#projects">بخش پروژه‌ها</a> پروژه بسازید و نیروها را به آن اختصاص دهید. گزارش کار و اتصال تلگرام پس از این مرحله آماده است.</div>' : ''}<div class="grid metrics">${metric('نیروهای اجرایی', ctx.e(ctx.n(workers.length)), 'پروفایل‌های ثبت‌شده', ctx)}${metric('مشتریان', ctx.e(ctx.n(state.users.filter(u => u.role === 'customer').length)), 'حساب‌های مشتری', ctx)}${metric('پروژه‌های جاری', ctx.e(ctx.n(state.projects.filter(p => p.status !== 'completed').length)), 'در حال اجرا یا نیازمند توجه', ctx)}</div><section class="card"><h2>نیروهای اجرایی</h2>${workers.map(w => `<article class="list-item"><div class="row between"><div><h3>${ctx.e(w.name)}</h3><small class="muted">${ctx.e(w.skill || 'تخصص ثبت نشده')} · ${ctx.e(w.department || 'تیم آریوس')} · ${ctx.e(w.email)}</small></div><span class="badge">${ctx.e(ctx.n(state.projects.filter(p => list(p.memberIds).includes(w.id)).length))} پروژه</span></div><div class="row between"><span>نرخ پایه: ${ctx.money(w.hourlyRate || 0)} / ساعت</span><button class="button secondary small" data-rate="${ctx.e(w.id)}">ثبت نرخ تاریخ‌دار</button></div>${list(w.rateHistory).length ? `<details><summary>تاریخچهٔ نرخ‌ها</summary>${[...w.rateHistory].sort((a,b) => a.effectiveDate.localeCompare(b.effectiveDate)).map(rate => `<p>${ctx.e(ctx.date(rate.effectiveDate))} — ${ctx.money(rate.hourlyRate)} / ساعت</p>`).join('')}</details>` : '<small class="muted">هنوز نرخ تاریخ‌دار ثبت نشده است.</small>'}</article>`).join('') || empty('نیرویی ثبت نشده است.', ctx)}</section><section class="card"><h2>مشتریان</h2>${state.users.filter(u => u.role === 'customer').map(c => `<div class="list-item row between"><div><strong>${ctx.e(c.name)}</strong><p class="muted">${ctx.e(c.email)}</p></div><span class="badge">${ctx.e(ctx.n(state.projects.filter(p => p.customerId === c.id).length))} پروژه</span></div>`).join('') || empty('مشتری ثبت نشده است.', ctx)}</section>`;
+  const active=state.users.filter(u=>!u.deletedAt),workers=active.filter(u=>u.role==='worker'),customers=active.filter(u=>u.role==='customer'),specialists=active.filter(u=>['warehouse','accountant'].includes(u.role)),archived=state.users.filter(u=>u.deletedAt);
+  const hosted=Boolean(ctx.capabilities?.hosted)&&!supabaseAuth(ctx);
+  const personRow=person=>`<article class="list-item"><div class="row between"><div><h3>${ctx.e(person.name)}</h3><p>${contact(person,ctx)}</p>${person.username?`<small class="muted">نام کاربری: <b dir="ltr">${ctx.e(person.username)}</b></small>`:''}</div><span class="badge">${ctx.e(roleLabels[person.role]||person.role)}</span></div><div class="actions">${accountActions(person,ctx)}</div></article>`;
+  return `${header('کاربران و دسترسی‌ها',supabaseAuth(ctx)?'حساب مستقل برای همکار، مشتری، انباردار و حسابدار':'نیروها، مشتریان و دسترسی پروژه',`${supabaseAuth(ctx)?'':'<button class="button secondary" data-new-profile>+ نیروی اجرایی</button>'}<button class="button primary" data-new-account>${supabaseAuth(ctx)?'+ ثبت کاربر':hosted?'+ عضو یا مشتری':'+ حساب ورود'}</button>`,ctx)}<div class="grid metrics">${metric('همکاران اجرایی',ctx.e(ctx.n(workers.length)),'حساب‌های فعال',ctx)}${metric('مشتریان',ctx.e(ctx.n(customers.length)),'حساب‌های فعال',ctx)}${metric('انبار و حسابداری',ctx.e(ctx.n(specialists.length)),'دسترسی‌های اختصاصی',ctx)}</div><section class="card"><h2>همکاران اجرایی</h2>${workers.map(w=>`<article class="list-item"><div class="row between"><div><h3>${ctx.e(w.name)}</h3><small class="muted">${ctx.e(w.skill||'تخصص ثبت نشده')} · ${ctx.e(w.department||'تیم آریوس')}</small><p>${contact(w,ctx)}</p>${w.username?`<small dir="ltr">${ctx.e(w.username)}</small>`:''}</div><span class="badge">${ctx.e(ctx.n(state.projects.filter(p=>list(p.memberIds).includes(w.id)).length))} پروژه</span></div><div class="row between"><span>نرخ پایه: ${ctx.money(w.hourlyRate||0)} / ساعت</span><div class="actions">${accountActions(w,ctx)}<button class="button secondary small" data-rate="${ctx.e(w.id)}">ثبت نرخ تاریخ‌دار</button></div></div>${list(w.rateHistory).length?`<details><summary>تاریخچهٔ نرخ‌ها</summary>${[...w.rateHistory].sort((a,b)=>a.effectiveDate.localeCompare(b.effectiveDate)).map(rate=>`<p>${ctx.e(ctx.date(rate.effectiveDate))} — ${ctx.money(rate.hourlyRate)} / ساعت</p>`).join('')}</details>`:'<small class="muted">هنوز نرخ تاریخ‌دار ثبت نشده است</small>'}</article>`).join('')||empty('همکاری ثبت نشده است',ctx)}</section><section class="card"><h2>مشتریان</h2>${customers.map(personRow).join('')||empty('مشتری ثبت نشده است',ctx)}</section><section class="card"><h2>انباردار و حسابدار</h2><p class="muted">انباردار فقط به انبار و ثبت مصرف پروژه دسترسی دارد؛ حسابدار از بخش مالی استفاده می‌کند</p>${specialists.map(personRow).join('')||empty('حسابی برای انبار و حسابداری ثبت نشده است',ctx)}</section>${supabaseAuth(ctx)?`<div class="notice">هر شخص یک حساب دارد. برای تبدیل مشتری به همکار یا برعکس، اطلاعات و نقش همان حساب را ویرایش کنید؛ سوابق قبلی حفظ می‌شوند.</div><section class="card"><details><summary>حساب‌های حذف‌شده از فهرست فعال (${ctx.e(ctx.n(archived.length))})</summary><p class="muted">ورود این حساب‌ها قطع است؛ گزارش‌ها و سوابق مالی حفظ شده‌اند. برای استفادهٔ دوباره از همان شماره، دسترسی حساب را بازگردانید.</p>${archived.map(personRow).join('')||empty('حساب حذف‌شده‌ای وجود ندارد',ctx)}</details></section>${renderPasswordRequests(state,ctx)}`:''}`;
 }
 function renderAnalytics(state, ctx) {
   const approved = state.reports.filter(r => r.status === 'approved');
@@ -89,26 +139,38 @@ function renderAnalytics(state, ctx) {
 }
 function renderSettings(state, ctx) {
   const live = Boolean(ctx.capabilities?.ai) && !ctx.api.isStatic;
-  return `${header('تنظیمات و اطلاعات حساب', 'اطلاعات اتصال و خروجیِ مجاز همین پروژهٔ مستقل آریوس', '', ctx)}<div class="grid two"><section class="card"><h2>حساب شما</h2><div class="list-item"><strong>${ctx.e(state.user.name)}</strong><p>${ctx.e(state.user.email || '')}</p><span class="badge">${ctx.e(labels[state.user.role] || state.user.role)}</span></div><p class="muted">${ctx.api.isStatic ? 'این پیش‌نمایش از دادهٔ نمایشی در مرورگر استفاده می‌کند؛ حساب واقعی ساخته نمی‌شود.' : ctx.demo ? 'نسخهٔ نمایشی سرور با اطلاعات ساختگی آریوس فعال است.' : 'ورود مستقل و دسترسی‌های پروژه در سرور کنترل می‌شوند.'}</p></section><section class="card"><h2>وضعیت اتصال‌ها</h2><div class="list-item row between"><span>دستیار هوش مصنوعی</span><span class="badge ${live ? 'success' : 'warning'}">${live ? 'متصل' : 'نیازمند تنظیم اتصال اختصاصی'}</span></div><div class="list-item row between"><span>پرداخت آنلاین</span><span class="badge warning">متصل نشده</span></div><p class="muted">دریافت وجه توسط مدیر با رسید و شماره پیگیری ثبت می‌شود. اطلاعات اتصال محرمانه در مرورگر نمایش داده نمی‌شود.</p></section></div>${state.user.role === 'manager' ? `<section class="card"><h2>خروجی و سوابق</h2><p class="muted">فایل JSON شامل داده‌های مجاز این مدیر است. این خروجی جایگزین نسخهٔ پشتیبان پایگاه داده نیست.</p><div class="row"><button class="button primary" data-export>دریافت خروجی داده‌ها</button>${ctx.api.isStatic || (ctx.capabilities?.hosted && !ctx.capabilities?.supabaseAuth) ? '<a class="button secondary" href="./downloads/ARIOS_OS_source.zip" download>دریافت سورس آریوس</a>' : ''}</div><h3>آخرین فعالیت‌ها</h3>${byDate(list(state.audit)).slice(0,12).map(a => `<div class="list-item"><strong>${ctx.e(a.description || a.action)}</strong><p class="muted">${ctx.e(ctx.personName(a.actorId))} · ${ctx.e(ctx.date(a.createdAt))}</p></div>`).join('') || empty('فعالیتی ثبت نشده است.', ctx)}</section>` : ''}`;
+  return `${header('تنظیمات و اطلاعات حساب', 'اطلاعات اتصال و خروجیِ مجاز همین پروژهٔ مستقل آریوس', '', ctx)}<div class="grid two"><section class="card"><h2>حساب شما</h2><div class="list-item"><strong>${ctx.e(state.user.name)}</strong><p>${contact(state.user, ctx)}</p>${state.user.role === 'manager' && state.user.email ? `<p class="muted">${ctx.e(state.user.email)}</p>` : ''}${state.user.username?`<p class="muted">نام کاربری: <b dir="ltr">${ctx.e(state.user.username)}</b></p>`:''}<span class="badge">${ctx.e(labels[state.user.role] || state.user.role)}</span></div><p class="muted">${ctx.api.isStatic ? 'این پیش‌نمایش از دادهٔ نمایشی در مرورگر استفاده می‌کند؛ حساب واقعی ساخته نمی‌شود.' : ctx.demo ? 'نسخهٔ نمایشی سرور با اطلاعات ساختگی آریوس فعال است.' : 'ورود مستقل و دسترسی‌های پروژه در سرور کنترل می‌شوند.'}</p></section><section class="card"><h2>وضعیت اتصال‌ها</h2><div class="list-item row between"><span>دستیار هوش مصنوعی</span><span class="badge ${live ? 'success' : 'warning'}">${live ? 'پیکربندی شده' : 'نیازمند تنظیم اتصال اختصاصی'}</span></div><div class="list-item row between"><span>ثبت دریافت وجه</span><span class="badge">رسید واقعی با تأیید مدیر</span></div><p class="muted">دریافت وجه توسط مدیر با رسید و شماره پیگیری ثبت می‌شود. اطلاعات اتصال محرمانه در مرورگر نمایش داده نمی‌شود.</p><div class="actions">${state.user.role === 'manager' ? '<a class="button primary" href="#voice">تنظیم اتصال‌ها</a>' : ''}${['manager','accountant','customer'].includes(state.user.role) ? '<a class="button secondary" href="#finance">صورت‌حساب و دریافت‌ها</a>' : ''}</div></section></div>${state.user.role === 'manager' ? `<section class="card"><h2>خروجی و سوابق</h2><p class="muted">فایل JSON شامل داده‌های مجاز این مدیر است. این خروجی جایگزین نسخهٔ پشتیبان پایگاه داده نیست.</p><div class="row"><button class="button primary" data-export>دریافت خروجی داده‌ها</button>${ctx.api.isStatic || (ctx.capabilities?.hosted && !ctx.capabilities?.supabaseAuth) ? '<a class="button secondary" href="./downloads/ARIOS_OS_source.zip" download>دریافت سورس آریوس</a>' : ''}</div><h3>آخرین فعالیت‌ها</h3>${byDate(list(state.audit)).slice(0,12).map(a => `<div class="list-item"><strong>${ctx.e(a.description || a.action)}</strong><p class="muted">${ctx.e(ctx.personName(a.actorId))} · ${ctx.e(ctx.date(a.createdAt))}</p></div>`).join('') || empty('فعالیتی ثبت نشده است.', ctx)}</section>` : ''}`;
 }
 export function renderOperations(page, state, ctx) {
-  if (!['reports','finance','inventory','support','assistant','team','analytics','settings'].includes(page)) return null;
+  if (!['reports','finance','inventory','support','assistant','team','analytics','settings','notifications'].includes(page)) return null;
   if (!allowed(page,state)) return empty('این بخش برای نقش شما در دسترس نیست.', ctx);
-  return ({reports:renderReports,finance:renderFinance,inventory:renderInventory,support:renderSupport,assistant:renderAssistant,team:renderTeam,analytics:renderAnalytics,settings:renderSettings})[page](state,ctx);
+  return ({reports:renderReports,finance:renderFinance,inventory:renderInventory,support:renderSupport,assistant:renderAssistant,notifications:renderNotifications,team:renderTeam,analytics:renderAnalytics,settings:renderSettings})[page](state,ctx);
 }
 function bind(selector, fn) { document.querySelectorAll(selector).forEach(el => el.addEventListener('click', () => fn(el))); }
 function ticketModal(state, ctx, projectId = '', description = '', after) {
   if (!state.projects.length) return ctx.toast('ابتدا باید به یک پروژه دسترسی داشته باشید.');
   ctx.modal({title:'درخواست پشتیبانی جدید', submitLabel:'ثبت تیکت', body:`${formProject(state,ctx,projectId)}${field('موضوع','<input name="subject" required maxlength="180" placeholder="خلاصهٔ مسئله">')}${field('اولویت','<select name="priority"><option value="normal">عادی</option><option value="high">بالا</option></select>')}${field('شرح مسئله',`<textarea name="description" required rows="7" maxlength="16000">${ctx.e(description)}</textarea>`)}`, onSubmit:async data => { const result=await ctx.mutate('ticket.create',Object.fromEntries(data)); if (after) after(result); }});
 }
-function newMessage(state, ctx, projectId) {
+function newMessage(state, ctx, projectId, initialText = '') {
   if (!state.projects.length) return ctx.toast('پروژه‌ای برای ارسال پیام ندارید.');
-  ctx.modal({title:'پیام پروژه',submitLabel:'ارسال پیام',body:`${formProject(state,ctx,projectId)}${field('متن پیام','<textarea name="text" required rows="5" maxlength="8000"></textarea>')}${state.user.role !== 'customer' ? '<label class="checkbox"><input type="checkbox" name="internal">پیام داخلی تیم؛ برای مشتری نمایش داده نشود</label>' : '<p class="muted">این پیام برای تیم پروژه ارسال می‌شود.</p>'}`,onSubmit: data => ctx.mutate('message.send',{projectId:data.get('projectId'),text:data.get('text'),internal:data.has('internal')})});
+  ctx.modal({title:'پیام پروژه',submitLabel:'ارسال پیام',body:`${formProject(state,ctx,projectId)}${field('متن پیام',`<textarea name="text" required rows="5" maxlength="8000">${ctx.e(initialText)}</textarea>`)}${state.user.role !== 'customer' ? '<label class="checkbox"><input type="checkbox" name="internal">پیام داخلی تیم؛ برای مشتری نمایش داده نشود</label>' : '<p class="muted">این پیام برای تیم پروژه ارسال می‌شود.</p>'}`,onSubmit: data => ctx.mutate('message.send',{projectId:data.get('projectId'),text:data.get('text'),internal:data.has('internal')})});
 }
 function openTicket(ticket,state,ctx) {
   ctx.modal({title:ticket.subject,submitLabel:'ارسال پاسخ',body:`<p class="pre-wrap">${ctx.e(ticket.description)}</p>${ctx.badge(ticket.status)}<div class="ticket-replies">${list(ticket.replies).map(reply => `<article class="message-item"><strong>${ctx.e(ctx.personName(reply.authorId))}</strong><small class="muted"> · ${ctx.e(ctx.date(reply.createdAt))}</small><p class="pre-wrap">${ctx.e(reply.text)}</p></article>`).join('') || empty('هنوز پاسخی ثبت نشده است.',ctx)}</div>${field('پاسخ شما','<textarea name="text" required rows="4" maxlength="8000"></textarea>')}${state.user.role === 'manager' ? `<label>وضعیت تیکت<select data-ticket-status="${ctx.e(ticket.id)}">${['open','in_progress','resolved'].map(v => `<option value="${v}" ${ticket.status === v ? 'selected' : ''}>${labels[v]}</option>`).join('')}</select></label><p class="muted">تغییر وضعیت مستقل از ارسال پاسخ ذخیره می‌شود.</p>` : ''}`,onSubmit:data=>ctx.mutate('ticket.reply',{id:ticket.id,text:data.get('text')})});
   const input=document.querySelector('[data-ticket-status]');
   input?.addEventListener('change',async()=>{ input.disabled=true; try { await ctx.mutate('ticket.update',{id:ticket.id,status:input.value}); } catch(error) { input.disabled=false; input.value=ticket.status; ctx.toast(error.message); }});
+}
+function openInvoiceDetails(invoice,state,ctx) {
+  const receipts=list(state.receipts).filter(item=>item.invoiceId===invoice.id);
+  const content=`<div class="invoice-document"><p class="eyebrow">ARIOS GROUP</p><h2>${ctx.e(invoice.title)}</h2><p>${ctx.e(ctx.projectName(invoice.projectId))}</p><div class="info-row"><span>شناسهٔ صورت‌حساب</span><strong>${ctx.e(invoice.id)}</strong></div><div class="info-row"><span>سررسید</span><strong>${ctx.e(ctx.date(invoice.dueDate))}</strong></div><div class="info-row"><span>مبلغ صورت‌حساب</span><strong>${ctx.money(invoice.amount)}</strong></div><div class="info-row"><span>پرداخت ثبت‌شده</span><strong>${ctx.money(invoice.paid)}</strong></div><div class="info-row"><span>مانده</span><strong>${ctx.money(invoice.amount-invoice.paid)}</strong></div><h3>رسیدهای ثبت‌شده</h3>${receipts.map(receipt=>`<p>${ctx.e(ctx.date(receipt.createdAt))} · ${ctx.money(receipt.amount)} · پیگیری ${ctx.e(receipt.reference)}</p>`).join('')||'<p>رسیدی برای این صورت‌حساب ثبت نشده است</p>'}<p class="invoice-document-note">این برگه بازنمایی سوابق ثبت‌شده در آریوس است و رسید بانکی یا تأیید پرداخت جدید محسوب نمی‌شود</p></div>`;
+  ctx.modal({title:'جزئیات صورت‌حساب',submitLabel:'چاپ صورت‌حساب',body:content,onSubmit:async()=>{
+    const popup=window.open('','_blank');
+    if(!popup)throw new Error('برای چاپ، اجازهٔ باز شدن پنجرهٔ جدید را در مرورگر بدهید');
+    popup.opener=null;
+    popup.addEventListener('load',()=>{popup.focus();popup.print();},{once:true});
+    popup.document.write(`<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><title>${ctx.e(invoice.title)}</title><style>body{font-family:Tahoma,Arial,sans-serif;max-width:760px;margin:50px auto;line-height:2;color:#1b3036;padding:20px}.info-row{display:flex;justify-content:space-between;gap:30px;border-bottom:1px solid #ddd;padding:8px 0}h2{font-size:24px}small{font-size:11px}.eyebrow{letter-spacing:3px;color:#8b754d}.invoice-document-note{margin-top:30px;font-size:11px;color:#666}@media print{body{margin:0;padding:12mm}}</style></head><body>${content}</body></html>`);
+    popup.document.close();
+  }});
 }
 function isCurrentAssistant(userId, projectId) {
   const mount=document.querySelector('[data-assistant-user]');
@@ -121,36 +183,43 @@ function wireAssistant(state,ctx) {
   const form=document.querySelector('[data-ai-form]');
   const textarea=form?.querySelector('textarea');
   textarea?.addEventListener('input',()=>{chat.draft=textarea.value;});
+  bind('[data-ai-prompt]',el=>{if(!textarea || chat.pending)return;chat.draft=el.dataset.aiPrompt;textarea.value=chat.draft;textarea.focus();});
+  bind('[data-ai-clear]',()=>{if(chat.pending)return;chat.messages=[];chat.draft='';chat.error='';chat.ticketId='';ctx.refresh();});
+  bind('[data-ai-retry]',()=>{if(!chat.pending && textarea?.value.trim())form?.requestSubmit();});
   bind('[data-open-support]',()=>ctx.go('support'));
   form?.addEventListener('submit',async event=>{
     event.preventDefault();
-    if (!ctx.capabilities?.ai || ctx.api.isStatic || chat.pending || !m.projectId) return;
+    if (!ctx.capabilities?.ai || ctx.api.isStatic || chat.pending) return;
     const message=textarea.value.trim();
-    if (!message) return ctx.toast('شرح مسئله را بنویسید.');
+    if (!message) return ctx.toast('پیام خود را بنویسید');
     const userId=state.user.id, projectId=m.projectId;
     const history=chat.messages.slice(-10).map(({role,content})=>({role,content}));
-    chat.messages.push({role:'user',content:message});chat.draft='';chat.pending=true;
+    const submitted={role:'user',content:message};
+    chat.messages.push(submitted);chat.draft='';chat.pending=true;chat.error='';
     ctx.refresh();
     try {
-      const result=await ctx.api.assistant({projectId,message,history});
-      if (typeof result.answer !== 'string' || result.live !== true) throw new Error('پاسخ معتبر از اتصال هوش مصنوعی دریافت نشد.');
+      const result=await ctx.api.assistant({...(projectId?{projectId}:{}),message,history});
+      if (typeof result.answer !== 'string' || !result.answer.trim() || result.live !== true) throw new Error('پاسخ معتبر از اتصال هوش مصنوعی دریافت نشد');
       chat.messages.push({role:'assistant',content:result.answer,sources:list(result.sources)});
-      if (result.ticket?.id) chat.ticketId=result.ticket.id;
+      if (projectId && result.ticket?.id) chat.ticketId=result.ticket.id;
     } catch(error) {
+      chat.messages=chat.messages.filter(item=>item!==submitted);
       chat.draft=message;
-      if(isCurrentAssistant(userId,projectId)) ctx.toast(error.message || 'اتصال به دستیار برقرار نشد؛ می‌توانید تیکت ثبت کنید.');
+      chat.error=error.message || 'اتصال به دستیار برقرار نشد؛ دوباره تلاش کنید';
     } finally {
       chat.pending=false;
       // A delayed response may never render into a different account or project.
-      if(isCurrentAssistant(userId,projectId)) await ctx.refresh();
+      if(isCurrentAssistant(userId,projectId)) {
+        try { await ctx.refresh(); } catch(error) { ctx.toast(error.message || 'تازه‌سازی گفتگو انجام نشد'); }
+      }
     }
   });
   bind('[data-ai-escalate]',()=>{
     if(chat.pending || chat.ticketId || !m.projectId) return;
     const draft=(textarea?.value || chat.draft || '').trim();
-    const transcript=chat.messages.map(message=>`${message.role === 'user' ? 'مشتری / کاربر' : 'دستیار'}: ${message.content}`).join('\n\n');
+    const transcript=chat.messages.map(message=>`${message.role === 'user' ? 'کاربر' : 'دستیار'}: ${message.content}`).join('\n\n');
     const description=[transcript,draft ? `شرح تکمیلی مسئله: ${draft}` : ''].filter(Boolean).join('\n\n');
-    if(!description) return ctx.toast('ابتدا شرح مسئله را بنویسید.');
+    if(!description) return ctx.toast('ابتدا شرح مسئله را بنویسید');
     ticketModal(state,ctx,m.projectId,description,result=>{chat.ticketId=result?.id || result?.ticket?.id || 'ثبت‌شده';ctx.refresh();});
   });
 }
@@ -165,6 +234,15 @@ function editReport(report, state, ctx) {
     onSubmit: data => ctx.mutate('report.update', { id: report.id, version: report.version, projectId: data.get('projectId'), date: data.get('date'), start: data.get('start'), end: data.get('end'), breakMinutes: Number(data.get('breakMinutes')), description: data.get('description'), output: data.get('output') })
   });
 }
+function openAccountPasswordReset(id,state,ctx){
+  const person=state.users.find(u=>u.id===id);if(!supabaseAuth(ctx)||person?.deletedAt||!assignableRoles.includes(person?.role))return;
+  ctx.modal({title:`بازنشانی رمز: ${person.name}`,submitLabel:'ثبت رمز تازه',body:`<div class="notice">ابتدا هویت فرد را بررسی کنید. پس از ذخیره، نشست‌های ورود قبلی او قطع می‌شوند. پیامک یا ایمیل خودکار ارسال نمی‌شود؛ رمز تازه را از مسیر مورد توافق فقط به صاحب حساب اعلام کنید.</div>${field('رمز تازه','<input name="password" type="password" required minlength="6" maxlength="128" autocomplete="new-password"><small class="muted">حداقل ۶ نویسه</small>')}${field('تکرار رمز تازه','<input name="confirmPassword" type="password" required minlength="6" maxlength="128" autocomplete="new-password">')}`,onSubmit:async data=>{
+    if(data.get('password')!==data.get('confirmPassword'))throw Error('رمز و تکرار آن یکسان نیستند');
+    const pending=memory('password-requests',state),previous=pending.requests;pending.requests=undefined;
+    try{return await ctx.mutate('account.password.reset',{id:person.id,password:data.get('password')});}
+    catch(error){pending.requests=previous;throw error;}
+  }});
+}
 export function wireOperations(page,state,ctx) {
   if(!allowed(page,state)) return;
   document.querySelector('[data-project-filter]')?.addEventListener('change',event=>{memory(page,state).projectId=event.target.value;ctx.refresh();});
@@ -175,7 +253,11 @@ export function wireOperations(page,state,ctx) {
     document.querySelector('[data-report-filter]')?.addEventListener('change',event=>{memory(page,state).filter=event.target.value;ctx.refresh();});
     bind('[data-review]',el=>ctx.modal({title:labels[el.dataset.status],submitLabel:'ذخیرهٔ بررسی',body:field('یادداشت بررسی',`<textarea name="reviewNote" rows="4" maxlength="2000" ${el.dataset.status==='approved'?'':'required'}></textarea>`),onSubmit:data=>ctx.mutate('report.review',{id:el.dataset.review,status:el.dataset.status,reviewNote:data.get('reviewNote')})}));
   }
-  if(page==='finance' && state.user.role==='manager') {
+  if(page==='finance') {
+    bind('[data-invoice-details]',el=>{const invoice=state.invoices.find(item=>item.id===el.dataset.invoiceDetails);if(invoice)openInvoiceDetails(invoice,state,ctx);});
+    bind('[data-coordinate-payment]',el=>{const invoice=state.invoices.find(item=>item.id===el.dataset.coordinatePayment);if(invoice)newMessage(state,ctx,invoice.projectId,`برای هماهنگی تسویهٔ صورت‌حساب «${invoice.title}» با ماندهٔ ${ctx.n(invoice.amount-invoice.paid)} تومان پیام می‌دهم. لطفاً روش و مشخصات پرداخت را اعلام کنید.`);});
+  }
+  if(page==='finance' && ['manager','accountant'].includes(state.user.role)) {
     bind('[data-new-invoice]',()=>ctx.openInvoice(memory(page,state).projectId || undefined));
     bind('[data-receipt]',el=>{
       const invoice=state.invoices.find(i=>i.id===el.dataset.receipt);if(!invoice)return;
@@ -196,11 +278,36 @@ export function wireOperations(page,state,ctx) {
     bind('[data-ticket]',el=>{const ticket=state.tickets.find(t=>t.id===el.dataset.ticket);if(ticket)openTicket(ticket,state,ctx);});
   }
   if(page==='team') {
+    bind('[data-reset-account]',el=>openAccountPasswordReset(el.dataset.resetAccount,state,ctx));
+    bind('[data-archive-account]',el=>{
+      const person=state.users.find(u=>u.id===el.dataset.archiveAccount);if(!person||person.deletedAt||!assignableRoles.includes(person.role))return;
+      ctx.modal({title:`حذف دسترسی: ${person.name}`,submitLabel:'حذف از کاربران فعال',body:`<p>ورود <strong>${ctx.e(person.name)}</strong> قطع می‌شود و از فهرست کاربران فعال خارج خواهد شد.</p><div class="notice">گزارش‌های کار، سوابق مالی و نام فرد در تاریخچه حفظ می‌شوند. می‌توانید بعداً دسترسی همین حساب را بازگردانید.</div><label class="checkbox"><input type="checkbox" required>حذف دسترسی این حساب را تأیید می‌کنم</label>`,onSubmit:()=>ctx.mutate('account.archive',{id:person.id})});
+    });
+    bind('[data-restore-account]',el=>{
+      const person=state.users.find(u=>u.id===el.dataset.restoreAccount);if(!person?.deletedAt)return;
+      ctx.modal({title:`بازگرداندن دسترسی: ${person.name}`,submitLabel:'بازگرداندن حساب',body:`<p>این حساب با همان شماره تماس، نقش و سوابق دوباره فعال می‌شود. رمز فعلی حفظ می‌شود؛ در صورت نیاز پس از فعال‌سازی آن را بازنشانی کنید.</p>`,onSubmit:()=>ctx.mutate('account.restore',{id:person.id})});
+    });
+    bind('[data-load-password-requests]',async button=>{
+      const mount=document.querySelector('[data-password-requests-user]'),target=mount?.querySelector('[data-password-request-list]');if(!target)return;
+      button.disabled=true;target.textContent='در حال دریافت درخواست‌ها…';
+      try{const response=await ctx.api.passwordResetRequests();if(!mount.isConnected||mount.dataset.passwordRequestsUser!==state.user.id)return;const m=memory('password-requests',state);m.requests=list(response.requests);target.innerHTML=passwordRequestRows(m.requests,state,ctx);target.querySelectorAll('[data-reset-account]').forEach(el=>el.addEventListener('click',()=>openAccountPasswordReset(el.dataset.resetAccount,state,ctx)));}
+      catch(error){if(target.isConnected){target.textContent=error.message||'دریافت درخواست‌ها انجام نشد؛ دوباره تازه‌سازی کنید';target.setAttribute('role','alert');}}
+      finally{if(button.isConnected)button.disabled=false;}
+    });
     bind('[data-new-profile]',()=>ctx.modal({title:'پروفایل نیروی اجرایی',submitLabel:'افزودن پروفایل',body:`<div class="notice">${ctx.capabilities?.hosted && !supabaseAuth(ctx) ? 'ایمیل حساب ChatGPT نیرو را وارد کنید. پس از مجازشدن دسترسی او به سایت، با همان ایمیل وارد فضای کار می‌شود.' : 'این فرم فقط پروفایل بدون ورود می‌سازد. برای نیرویی که باید وارد پنل شود، از ابتدا «حساب ورود» بسازید.'}</div>${field('نام','<input name="name" required maxlength="100">')}${field('ایمیل کاری','<input name="email" type="email" required>')}${field('واحد','<input name="department" maxlength="100">')}${field('تخصص','<input name="skill" maxlength="180">')}`,onSubmit:data=>ctx.mutate('worker.create',Object.fromEntries(data))}));
     bind('[data-new-account]',()=>{
       if(ctx.api.isStatic) return ctx.toast('ساخت حساب ورود در پیش‌نمایش فعال نیست؛ نسخهٔ سرور مستقل لازم است.');
       const hosted=Boolean(ctx.capabilities?.hosted) && !supabaseAuth(ctx);
-      ctx.modal({title:hosted?'افزودن عضو یا مشتری':'حساب ورود مستقل',submitLabel:hosted?'ثبت عضو و دسترسی پروژه':'ساخت حساب',body:`${hosted?'<div class="notice">ایمیل باید با حساب ChatGPT فرد یکسان باشد. برای ورود، دسترسی سایت هم باید از تنظیمات اشتراک‌گذاری به او داده شود.</div>':supabaseAuth(ctx)?'<div class="notice">برای تیم یا مشتری، حساب اختصاصی با ایمیل و رمز عبور بسازید. نیرو از «ورود تیم» و مشتری از «ورود مشتری» وارد پنل می‌شود.</div>':''}${field('نام','<input name="name" required maxlength="100">')}${field(hosted?'ایمیل حساب ChatGPT':'ایمیل','<input name="email" type="email" required autocomplete="off">')}${field('نقش','<select name="role"><option value="customer">مشتری</option><option value="worker">نیروی اجرایی</option></select>')}${hosted?'':field('رمز عبور اولیه','<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password">')}<fieldset><legend>پروژه‌های مجاز</legend>${state.projects.map(p=>`<label class="checkbox"><input name="projectIds" type="checkbox" value="${ctx.e(p.id)}">${ctx.e(p.name)}${p.customerId?' · دارای مشتری':''}</label>`).join('')||'<p class="muted">هنوز پروژه‌ای ساخته نشده است؛ اعضا را بعداً از بخش پروژه‌ها تخصیص دهید.</p>'}</fieldset><p class="muted">حساب مشتری فقط به پروژهٔ بدون مشتری متصل می‌شود. ${hosted?'عضویت و نقش فرد با ایمیل واردشده ثبت می‌شود.':'ایمیل باید جدید باشد؛ پروفایل بدون ورود با این فرم تبدیل نمی‌شود.'}</p>`,onSubmit:data=>ctx.mutate('account.create',{name:data.get('name'),email:data.get('email'),role:data.get('role'),...(hosted?{}:{password:data.get('password')}),projectIds:data.getAll('projectIds')})});
+      if(supabaseAuth(ctx)) {
+        ctx.modal({title:'ثبت همکار یا مشتری',submitLabel:'ساخت حساب',body:`<div class="notice">حساب با شماره تماس و رمز ساخته می‌شود؛ ایمیل لازم نیست. بعداً می‌توانید نقش مشتری و همکار را از همین بخش تغییر دهید.</div>${accountFields(null,ctx,{create:true})}<fieldset><legend>پروژه‌های مجاز (اختیاری)</legend>${state.projects.map(p=>`<label class="checkbox"><input name="projectIds" type="checkbox" value="${ctx.e(p.id)}">${ctx.e(p.name)}</label>`).join('')||'<p class="muted">پس از ساخت پروژه، دسترسی را از بخش پروژه‌ها مشخص کنید.</p>'}</fieldset><p class="muted">اگر این شخص قبلاً حساب دارد، اطلاعات و نقش همان حساب را ویرایش کنید.</p>`,onSubmit:data=>ctx.mutate('account.create',{name:data.get('name'),phone:data.get('phone'),role:data.get('role'),username:data.get('username')||'',password:data.get('password'),projectIds:data.getAll('projectIds')})});
+        wireAccountFields();return;
+      }
+      ctx.modal({title:hosted?'افزودن عضو یا مشتری':'حساب ورود مستقل',submitLabel:hosted?'ثبت عضو و دسترسی پروژه':'ساخت حساب',body:`${hosted?'<div class="notice">ایمیل باید با حساب ChatGPT فرد یکسان باشد. برای ورود، دسترسی سایت هم باید از تنظیمات اشتراک‌گذاری به او داده شود.</div>':''}${field('نام','<input name="name" required maxlength="100">')}${field(hosted?'ایمیل حساب ChatGPT':'ایمیل','<input name="email" type="email" required autocomplete="off">')}${field('نقش','<select name="role"><option value="customer">مشتری</option><option value="worker">همکار اجرایی</option></select>')}${hosted?'':field('رمز عبور اولیه','<input name="password" type="password" required minlength="6" maxlength="128" autocomplete="new-password">')}<fieldset><legend>پروژه‌های مجاز</legend>${state.projects.map(p=>`<label class="checkbox"><input name="projectIds" type="checkbox" value="${ctx.e(p.id)}">${ctx.e(p.name)}${p.customerId?' · دارای مشتری':''}</label>`).join('')||'<p class="muted">هنوز پروژه‌ای ساخته نشده است؛ اعضا را بعداً از بخش پروژه‌ها تخصیص دهید.</p>'}</fieldset>`,onSubmit:data=>ctx.mutate('account.create',{name:data.get('name'),email:data.get('email'),role:data.get('role'),...(hosted?{}:{password:data.get('password')}),projectIds:data.getAll('projectIds')})});
+    });
+    bind('[data-edit-account]',el=>{
+      const person=state.users.find(item=>item.id===el.dataset.editAccount);
+      if(!supabaseAuth(ctx)||!person||person.deletedAt||!assignableRoles.includes(person.role))return;
+      ctx.modal({title:`اطلاعات و نقش: ${person.name}`,submitLabel:'ذخیرهٔ اطلاعات و نقش',body:`${accountFields(person,ctx)}${field('واحد',`<input name="department" value="${ctx.e(person.department||'')}" maxlength="100">`)}${field('تخصص',`<input name="skill" value="${ctx.e(person.skill||'')}" maxlength="180">`)}<div class="notice">تغییر نقش، دسترسی‌های بعدی این حساب را تغییر می‌دهد. گزارش‌ها، صورت‌حساب‌ها و سوابق قبلی حذف نمی‌شوند. رمز عبور فعلی حفظ می‌شود.</div>`,onSubmit:data=>ctx.mutate('account.update',{id:person.id,name:data.get('name'),phone:data.get('phone'),role:data.get('role'),username:data.get('username')||'',department:data.get('department'),skill:data.get('skill')})});wireAccountFields();
     });
     bind('[data-rate]',el=>{
       const worker=state.users.find(u=>u.id===el.dataset.rate);if(!worker)return;

@@ -1,11 +1,11 @@
 {
   "name": "arios-os",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Independent Persian ARIOS project operations and customer portal",
   "engines": {
-    "node": ">=24.0.0"
+    "node": "24.x"
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",

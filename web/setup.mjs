@@ -10,7 +10,7 @@ form.addEventListener('submit',async event=>{
  event.preventDefault();error.hidden=true;success.hidden=true;
  if(!code){error.textContent='لینک راه‌اندازی معتبر نیست؛ از لینک اختصاصی استفاده کنید.';error.hidden=false;return;}
  if(password.value!==confirm.value){error.textContent='تکرار رمز عبور با رمز جدید یکسان نیست.';error.hidden=false;confirm.focus();return;}
- if(password.value.length<12){error.textContent='رمز عبور باید دست‌کم ۱۲ نویسه داشته باشد.';error.hidden=false;password.focus();return;}
+ if(password.value.length<6){error.textContent='رمز عبور باید دست‌کم ۶ نویسه داشته باشد.';error.hidden=false;password.focus();return;}
  button.disabled=true;label.textContent='در حال ساخت حساب…';let created=false;
  try{const email=form.email.value.trim(),secret=password.value;await request('/api/bootstrap',{code,email,password:secret});created=true;code='';label.textContent='حساب ساخته شد؛ در حال ورود…';await request('/api/login',{email,password:secret,portal:'team'});password.value='';confirm.value='';success.textContent='حساب مدیر آماده است. در حال رفتن به فضای کار…';success.hidden=false;location.assign('/portal/?portal=team#dashboard');}
  catch(err){error.textContent=created?'حساب مدیر ساخته شد، اما ورود خودکار کامل نشد. از صفحهٔ ورود همکاران با همین ایمیل و رمز وارد شوید.':err instanceof TypeError?'ارتباط برقرار نشد. اتصال اینترنت را بررسی و دوباره امتحان کنید.':err.message||'راه‌اندازی انجام نشد.';error.hidden=false;button.disabled=created;label.textContent=created?'حساب مدیر ساخته شد':'ساخت حساب و ورود';}

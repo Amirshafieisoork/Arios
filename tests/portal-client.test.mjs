@@ -89,7 +89,7 @@ test('standalone and legacy hosted portals retain multipart voice upload behavio
   assert.equal((await api.voiceUpload(file, 'project-one')).id, 'legacy-draft');
 });
 
-test('Supabase account forms require an initial password while legacy ChatGPT forms remain passwordless', async t => {
+test('Supabase accounts use phone and a simple initial password while legacy ChatGPT remains passwordless', async t => {
   const state = publicState(createSeedState(), 'manager');
   let click, modal, mutation;
   const button = { addEventListener: (_, handler) => { click = handler; } };
@@ -100,20 +100,65 @@ test('Supabase account forms require an initial password while legacy ChatGPT fo
   wireOperations('team', state, ctx);
   click();
   assert.match(modal.body, /name="password"/);
-  assert.match(modal.body, /minlength="12" maxlength="128"/);
+  assert.match(modal.body, /minlength="6" maxlength="128"/);
+  assert.match(modal.body, /name="phone" type="tel"/);
+  assert(!modal.body.includes('name="email"'));
   assert(!modal.body.includes('ChatGPT'));
   const data = new FormData();
-  for (const [key, value] of Object.entries({ name: 'عضو تازه', email: 'member@example.com', role: 'worker', password: 'test-initial-password' })) data.set(key, value);
+  for (const [key, value] of Object.entries({ name: 'عضو تازه', phone: '۰۹۱۲۱۲۳۴۵۶۷', role: 'worker', password: '123456' })) data.set(key, value);
   data.append('projectIds', 'p1');
   await modal.onSubmit(data);
   assert.equal(mutation.action, 'account.create');
-  assert.equal(mutation.payload.password, 'test-initial-password');
+  assert.deepEqual(mutation.payload, { name: 'عضو تازه', phone: '۰۹۱۲۱۲۳۴۵۶۷', role: 'worker', username: '', password: '123456', projectIds: ['p1'] });
   ctx.authMode = 'chatgpt';
   ctx.capabilities.supabaseAuth = false;
   wireOperations('team', state, ctx);
   click();
   assert(!modal.body.includes('name="password"'));
   assert.match(modal.body, /ChatGPT/);
+});
+
+test('manager edits the same account between customer and coworker without replacing its password or history', async t => {
+  const state = publicState(createSeedState(), 'manager');
+  const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  const edits = new Map(), mutations = [];
+  const buttons = ['worker', 'customer'].map(id => ({ dataset: { editAccount: id }, addEventListener: (_, callback) => edits.set(id, callback) }));
+  setGlobal(t, 'document', { querySelector: () => null, querySelectorAll: selector => selector === '[data-edit-account]' ? buttons : [] });
+  let modal;
+  const ctx = { e: escape, n: String, money: String, date: String, personName: String, projectName: String, authMode: 'supabase', capabilities: { hosted: true, supabaseAuth: true }, api: { isStatic: false }, modal: value => { modal = value; }, mutate: async (action, payload) => mutations.push({ action, payload }) };
+  const before = structuredClone(state);
+  wireOperations('team', state, ctx);
+  for (const [id, role] of [['worker', 'customer'], ['customer', 'worker']]) {
+    edits.get(id)();
+    assert.match(modal.body, /name="phone" type="tel"/);
+    assert(!modal.body.includes('name="email"'));
+    assert(!modal.body.includes('name="password"'));
+    const form = new FormData();
+    for (const [name, value] of Object.entries({ name: 'نام اصلاح‌شده', phone: '09121234567', role, department: 'اجرا', skill: 'شبکه' })) form.set(name, value);
+    await modal.onSubmit(form);
+    assert.deepEqual(mutations.at(-1), { action: 'account.update', payload: { id, name: 'نام اصلاح‌شده', phone: '09121234567', role, username: '', department: 'اجرا', skill: 'شبکه' } });
+  }
+  assert.deepEqual(state, before);
+  for (const role of ['worker', 'customer']) {
+    edits.clear();
+    wireOperations('team', publicState(createSeedState(), role), ctx);
+    assert.equal(edits.size, 0, 'only a manager may wire account editing');
+  }
+});
+
+test('team shows phone call links for coworkers and customers while preserving old account email privately', () => {
+  const state = publicState(createSeedState(), 'manager');
+  for (const person of state.users.filter(user => ['worker', 'customer'].includes(user.role))) {
+    person.email = `${person.id}-private-email@example.com`;
+    person.phone = person.id === 'worker' ? '+989121234567' : '';
+  }
+  const ctx = { e: String, n: String, money: String, date: String, authMode: 'supabase', capabilities: { hosted: true, supabaseAuth: true } };
+  const html = renderOperations('team', state, ctx);
+  assert.match(html, /href="tel:\+989121234567"/);
+  assert.match(html, /شماره تماس ثبت نشده/);
+  assert(!html.includes('private-email@example.com'));
+  assert.equal((html.match(/data-edit-account=/g) || []).length, state.users.filter(user => ['worker', 'customer'].includes(user.role)).length);
+  assert(!html.includes('data-new-profile'));
 });
 
 async function mountPortal(t, { session, state, search = '', hash = '#dashboard' }) {

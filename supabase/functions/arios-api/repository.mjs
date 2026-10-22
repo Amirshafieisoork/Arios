@@ -55,6 +55,8 @@ export function createRepository(client) {
   const createProfile = ({ authUserId, domainUserId, role }) => result(client.from('arios_profiles').insert({ auth_user_id: authUserId, domain_user_id: domainUserId, role }).select(profileColumns).single());
   const bootstrap = ({ authUserId, state, codeHash }) => rpc('arios_bootstrap', { p_auth_user_id: authUserId, p_state: state, p_code_hash: codeHash });
   const commitAccount = ({ expectedRevision, state, authUserId, domainUserId, role }) => rpc('arios_account_commit', { p_expected_revision: expectedRevision, p_state: state, p_auth_user_id: authUserId, p_domain_user_id: domainUserId, p_role: role });
+  const authSessionValid = (authUserId, sessionId, validAfter) => rpc('arios_auth_session_valid', { p_auth_user_id: authUserId, p_session_id: sessionId, p_valid_after: validAfter });
+  const updateAccount = ({ expectedRevision, state, authUserId, domainUserId, role }) => rpc('arios_account_update', { p_expected_revision: expectedRevision, p_state: state, p_auth_user_id: authUserId, p_domain_user_id: domainUserId, p_role: role });
 
   const listDrafts = (userId = null, limit = 100) => {
     let query = client.from('arios_drafts').select(draftColumns).order('created_at', { ascending: false }).limit(boundedLimit(limit));
@@ -67,7 +69,7 @@ export function createRepository(client) {
     source_metadata: sourceMetadata, storage_path: storagePath, created_at: createdAt, updated_at: createdAt,
   }).select(draftColumns).single());
   const updateDraft = (id, patch, { claim } = {}) => {
-    const allowed = ['status', 'transcript', 'fields', 'error', 'report_id', 'claim', 'claim_until', 'storage_path'];
+    const allowed = ['status', 'transcript', 'fields', 'error', 'report_id', 'claim', 'claim_until', 'storage_path', 'source_metadata'];
     const data = Object.fromEntries(allowed.filter(key => patch[key] !== undefined).map(key => [key, patch[key]]));
     if (data.claim_until === null) data.claim_until = 0;
     data.updated_at = now();
@@ -86,6 +88,9 @@ export function createRepository(client) {
     .in('status', ['pending', 'failed']).lt('created_at', before).limit(boundedLimit(limit, 100)));
   const completedUploadDrafts = (before, limit = 20) => result(client.from('arios_drafts').select(draftColumns).eq('source', 'upload').neq('transcript', '')
     .not('storage_path', 'is', null).lt('created_at', before).limit(boundedLimit(limit, 100)));
+  const expiredAudioDrafts = (before, limit = 40) => result(client.from('arios_drafts').select(draftColumns).in('source', ['upload', 'telegram'])
+    .not('storage_path', 'is', null).lt('created_at', before)
+    .or(`status.neq.processing,claim_until.lt.${Date.now()}`).limit(boundedLimit(limit, 100)));
 
   const listTelegramLinks = (userId = null) => {
     let query = client.from('arios_telegram_links').select(linkColumns);
@@ -115,8 +120,8 @@ export function createRepository(client) {
   const rateLimit = (key, limit, windowMs = 60000) => rpc('arios_rate_limit', { p_key: key, p_limit: limit, p_window_ms: windowMs });
   return {
     loadState, initState, mutateState, getSetting, setSetting, deleteSetting,
-    getProfile, getProfileByDomainId, createProfile, bootstrap, commitAccount,
-    listDrafts, getDraft, createDraft, updateDraft, claimDraft, pendingTelegramDrafts, expiredUploadDrafts, completedUploadDrafts,
+    getProfile, getProfileByDomainId, createProfile, bootstrap, commitAccount, updateAccount, authSessionValid,
+    listDrafts, getDraft, createDraft, updateDraft, claimDraft, pendingTelegramDrafts, expiredUploadDrafts, completedUploadDrafts, expiredAudioDrafts,
     listTelegramLinks, getTelegramLink, createLinkCode, consumeLinkCode, unlinkTelegram,
     ingestUpdates, listPendingUpdates, setUpdateStatus, hasTelegramHistory,
     acquireLock, releaseLock, rateLimit,

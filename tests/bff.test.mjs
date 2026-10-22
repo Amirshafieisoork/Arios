@@ -69,7 +69,7 @@ test('same-origin POST protection rejects missing, foreign and cross-site origin
     { origin: 'https://foreign.example.com' },
     { origin: APP, extraHeaders: { 'Sec-Fetch-Site': 'cross-site' } },
   ]) {
-    for (const path of ['/api/login', '/api/logout', '/api/actions', '/api/bootstrap']) {
+    for (const path of ['/api/login', '/api/logout', '/api/actions', '/api/bootstrap', '/api/password-reset/request']) {
       const denied = await f.call(path, { method: 'POST', body: { email: 'member@example.com', password: PASSWORD }, cookie: 'arios_access=test-existing-access', ...scenario });
       assert.equal(denied.status, 403, path);
       assert.equal(denied.data.code, 'ORIGIN_DENIED');
@@ -131,14 +131,16 @@ test('unverified workspace membership never creates browser session cookies', as
   }
 });
 
-test('portal login enforces customer versus team membership without issuing wrong-portal cookies', async t => {
+test('verified account role chooses its portal even when the other login page was used', async t => {
   for (const scenario of [
     { role: 'manager', portal: 'team', status: 200 },
     { role: 'worker', portal: 'team', status: 200 },
+    { role: 'warehouse', portal: 'team', status: 200 },
+    { role: 'accountant', portal: 'team', status: 200 },
     { role: 'customer', portal: 'client', status: 200 },
-    { role: 'customer', portal: 'team', status: 403 },
-    { role: 'worker', portal: 'client', status: 403 },
-    { role: 'manager', portal: 'client', status: 403 },
+    { role: 'customer', portal: 'team', status: 200 },
+    { role: 'worker', portal: 'client', status: 200 },
+    { role: 'manager', portal: 'client', status: 200 },
   ]) {
     await t.test(scenario.role + ' -> ' + scenario.portal, async () => {
       const f = fixture({ upstream: call => {
@@ -152,7 +154,8 @@ test('portal login enforces customer versus team membership without issuing wron
         assert.equal(login.data.code, 'WRONG_PORTAL');
         assert.deepEqual(login.cookies, []);
       } else {
-        assert.equal(login.data.portal, scenario.portal);
+        assert.equal(login.data.portal, scenario.role === 'customer' ? 'client' : 'team');
+        assert.equal(login.data.user.role, scenario.role, 'The selected page cannot change authorization.');
         assert.equal(login.cookies.length, 2);
       }
     });
@@ -266,4 +269,53 @@ test('public health reports setup and backend failures without tokens or secret 
     assert(!JSON.stringify(health.data).includes('raw network'));
     assert.deepEqual(health.cookies, []);
   });
+});
+
+
+test('phone login normalizes Persian digits and keeps the Auth identity mapping server-side', async () => {
+  const f = fixture({ upstream: call => {
+    if(call.path === '/functions/v1/arios-api/password-login') {
+      assert.deepEqual(call.body, {phone:'+989123456789',password:PASSWORD});
+      assert.equal(call.headers.has('Authorization'),false);
+      return json(TOKENS);
+    }
+    assert.equal(call.path,'/functions/v1/arios-api/session');
+    return json({...memberSession('worker'),user:{id:'member-one',name:'همکار',phone:'+989123456789',role:'worker'}});
+  }});
+  const result=await f.call('/api/login',{method:'POST',body:{identifier:'۰۹۱۲ ۳۴۵ ۶۷۸۹',password:PASSWORD,portal:'client'}});
+  assert.equal(result.status,200);assert.equal(result.data.portal,'team');assert.equal(result.data.user.phone,'+989123456789');
+  assert.equal(result.cookies.length,2);
+  assert(!JSON.stringify(result.data).includes(TOKENS.access_token));
+  assert.equal(f.calls.some(call=>call.path.startsWith('/auth/v1/token')),false);
+});
+
+test('internal phone aliases and malformed numbers cannot bypass phone identity resolution',async()=>{
+  const f=fixture();
+  for(const identifier of ['phone.989123456789@phone.arios.invalid','123','+98badphone']) {
+    const result=await f.call('/api/login',{method:'POST',body:{identifier,password:PASSWORD}});
+    assert.equal(result.status,400);assert.equal(result.cookies.length,0);
+  }
+  assert.equal(f.calls.length,0);
+});
+
+test('published project gallery is an anonymous GET with no workspace cookies forwarded',async()=>{
+  const f=fixture({upstream:call=>{
+    assert.equal(call.path,'/functions/v1/arios-api/public-projects');assert.equal(call.method,'GET');
+    assert.equal(call.headers.has('Authorization'),false);return json({projects:[]});
+  }});
+  const result=await f.call('/api/public-projects');assert.equal(result.status,200);assert.deepEqual(result.data,{projects:[]});
+});
+
+test('public recovery forwards only the normalized identifier without session credentials or Auth tokens', async () => {
+  const acknowledgement = { ok: true, message: 'برای بازیابی با مدیر هماهنگ کنید' };
+  const f = fixture({ upstream: call => {
+    assert.equal(call.path, '/functions/v1/arios-api/password-reset/request');
+    assert.equal(call.method, 'POST');
+    assert.equal(call.headers.has('Authorization'), false);
+    assert.deepEqual(call.body, { identifier: '+989123456789' });
+    return json(acknowledgement);
+  } });
+  const result = await f.call('/api/password-reset/request', { method: 'POST', body: { identifier: '۰۹۱۲۳۴۵۶۷۸۹', password: 'must-not-forward' }, cookie: 'arios_access=existing-session; arios_refresh=existing-refresh' });
+  assert.equal(result.status, 200); assert.deepEqual(result.data, acknowledgement);
+  assert.deepEqual(result.cookies, []);
 });
