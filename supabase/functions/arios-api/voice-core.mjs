@@ -1,7 +1,7 @@
 /** Server-only voice integrations. No credentials, provider errors or Telegram URLs escape this module. */
 export const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
 const MAX_TRANSCRIPT_CHARS = 60000;
-const ALLOWED_PROVIDERS = new Set(['api.avalai.ir', 'api.openai.com']);
+const PROVIDER_PATHS = new Map([['api.avalai.ir', '/v1'], ['api.openai.com', '/v1'], ['api.groq.com', '/openai/v1']]);
 const AUDIO_TYPES = new Map([
   ['audio/ogg', 'ogg'], ['application/ogg', 'ogg'], ['audio/opus', 'ogg'],
   ['audio/mpeg', 'mp3'], ['audio/mp3', 'mp3'], ['audio/mp4', 'm4a'],
@@ -46,13 +46,14 @@ function providerConfig(config, needsReportModel = false) {
   if (!config || !plain(config.aiBaseUrl) || !plain(config.aiApiKey)) fail('تنظیمات اختصاصی هوش مصنوعی آریوس کامل نشده است.', 503, 'AI_NOT_CONFIGURED');
   let base;
   try { base = new URL(config.aiBaseUrl); } catch { fail('نشانی سرویس هوش مصنوعی مجاز نیست.', 503, 'AI_CONFIG_INVALID'); }
-  if (base.protocol !== 'https:' || !ALLOWED_PROVIDERS.has(base.hostname) || base.port || base.username || base.password || base.search || base.hash || !['/v1', '/v1/'].includes(base.pathname)) {
+  const providerPath = PROVIDER_PATHS.get(base.hostname);
+  if (base.protocol !== 'https:' || !providerPath || base.port || base.username || base.password || base.search || base.hash || ![providerPath, providerPath + '/'].includes(base.pathname)) {
     fail('نشانی سرویس هوش مصنوعی مجاز نیست.', 503, 'AI_CONFIG_INVALID');
   }
   const model = needsReportModel ? config.aiModel : config.transcriptionModel;
   if (typeof model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(model)) fail('مدل هوش مصنوعی آریوس تنظیم نشده است.', 503, 'AI_NOT_CONFIGURED');
   if (config.aiApiKey.length > 4096 || /[\r\n]/.test(config.aiApiKey)) fail('کلید سرویس هوش مصنوعی معتبر نیست.', 503, 'AI_CONFIG_INVALID');
-  return { base: base.origin + '/v1', model, key: config.aiApiKey.trim() };
+  return { base: base.origin + providerPath, model, key: config.aiApiKey.trim(), groq: base.hostname === 'api.groq.com' };
 }
 
 // Provider bodies may contain credentials or account details. Inspect them only to
@@ -181,6 +182,13 @@ export async function requestAIJSON({ config, messages, maxTokens = 1800, temper
   const provider = providerConfig(config, true);
   if (!Array.isArray(messages) || !messages.length || messages.length > 16) fail('درخواست هوش مصنوعی معتبر نیست.');
   const body = { model: provider.model, temperature, response_format: { type: 'json_object' }, max_tokens: maxTokens, messages };
+  if (provider.groq) {
+    // Groq documents max_completion_tokens; do not spend a retry on its deprecated alias.
+    body.max_completion_tokens = body.max_tokens; delete body.max_tokens;
+    if (['openai/gpt-oss-20b', 'openai/gpt-oss-120b'].includes(provider.model)) {
+      body.reasoning_effort = 'low'; body.include_reasoning = false;
+    }
+  }
   const started = Date.now();
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const remaining = timeoutMs - (Date.now() - started);
@@ -254,7 +262,8 @@ export async function testAIConnection({ config, fetcher = fetch }) {
       return { ok: false, code: error instanceof VoiceError ? error.code : 'UPSTREAM_UNAVAILABLE', message: error instanceof VoiceError ? error.message : 'بررسی سرویس انجام نشد؛ دوباره تلاش کنید.', ...(Number.isInteger(error?.providerStatus) ? { providerStatus: error.providerStatus } : {}), ...(PROVIDER_CODES.has(error?.providerCode) ? { providerCode: error.providerCode } : {}) };
     }
   };
-  const chat = await outcome(() => requestAIJSON({ config, fetcher, maxTokens: 32, timeoutMs: 20000, messages: [{ role: 'system', content: 'Return only the JSON object {"ok":true}.' }, { role: 'user', content: 'Connection test. No user data is included.' }] }), 'مدل گفت‌وگو به آزمون کوتاه پاسخ داد');
+  const groq = ['https://api.groq.com/openai/v1', 'https://api.groq.com/openai/v1/'].includes(config?.aiBaseUrl);
+  const chat = await outcome(() => requestAIJSON({ config, fetcher, maxTokens: groq ? 512 : 32, timeoutMs: 20000, messages: [{ role: 'system', content: 'Return only the JSON object {"ok":true}.' }, { role: 'user', content: 'Connection test. No user data is included.' }] }), 'مدل گفت‌وگو به آزمون کوتاه پاسخ داد');
   const transcription = await outcome(async () => {
     const provider = providerConfig(config);
     // One second, mono PCM silence: valid WAV bytes, no recorded person or private data.
@@ -264,7 +273,9 @@ export async function testAIConnection({ config, fetcher = fetch }) {
     const form = new FormData(); form.set('model', provider.model); form.set('file', new Blob([bytes], { type: 'audio/wav' }), 'arios-connection-test.wav');
     await request(provider.base + '/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${provider.key}` }, body: form }, { fetcher, maxBytes: 32768, timeoutMs: 20000 });
   }, 'سرویس رونویسی فایل آزمایشی را پذیرفت');
-  return { ok: chat.ok && transcription.ok, provider: config?.aiBaseUrl === 'https://api.avalai.ir/v1' ? 'AvalAI' : config?.aiBaseUrl === 'https://api.openai.com/v1' ? 'OpenAI' : 'تنظیم نشده', chat, transcription };
+  const providerNames = new Map([['https://api.avalai.ir/v1', 'AvalAI'], ['https://api.openai.com/v1', 'OpenAI'], ['https://api.groq.com/openai/v1', 'Groq']]);
+  const base = typeof config?.aiBaseUrl === 'string' ? config.aiBaseUrl.replace(/\/$/, '') : '';
+  return { ok: chat.ok && transcription.ok, provider: providerNames.get(base) || 'تنظیم نشده', chat, transcription };
 }
 
 const isISODate = value => {

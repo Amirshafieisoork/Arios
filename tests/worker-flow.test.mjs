@@ -48,6 +48,19 @@ function fixture(t) {
       if (url.pathname.endsWith('/getFile')) return responseJSON({ ok: true, result: { file_id: 'voice-test', file_size: 8, file_path: 'voice/test.ogg' } });
       if (url.pathname.startsWith('/file/bot')) return new Response(new Uint8Array([79, 103, 103, 83, 0, 1, 2, 3]), { headers: { 'Content-Type': 'audio/ogg' } });
     }
+    if (url.hostname === 'api.groq.com' && url.pathname === '/openai/v1/chat/completions') {
+      const body=JSON.parse(options.body);
+      assert.equal(options.headers.Authorization,'Bearer dedicated-test-groq-key');
+      assert.equal(body.model,'openai/gpt-oss-20b');
+      assert.equal(body.max_completion_tokens,1800);
+      assert.equal(body.max_tokens,undefined);
+      assert.equal(body.reasoning_effort,'low');
+      assert.equal(body.include_reasoning,false);
+      assert.deepEqual(body.response_format,{type:'json_object'});
+      assert(!JSON.stringify(body).includes('hourlyRate'));
+      assert(!JSON.stringify(body).includes('contractAmount'));
+      return responseJSON({choices:[{message:{content:JSON.stringify({answer:'پاسخ فارسی آزمون گروک',needsHumanSupport:false})}}]});
+    }
     if (url.hostname === 'api.avalai.ir' && mock.providerRedirect && url.pathname.endsWith(mock.providerRedirect)) return new Response(null, { status: 301, headers: { Location: 'https://untrusted.test/capture-provider-key' } });
     if (url.hostname === 'api.avalai.ir' && url.pathname === '/v1/audio/transcriptions') {
       if (mock.transcriptionFailure) return new Response('Temporarily unavailable', { status: 503 });
@@ -348,6 +361,38 @@ test('provider changes require a new dedicated key and Telegram history permits 
   assert.equal(links.length, 1);
   assert.equal(links[0].user_id, workerId);
   assert.equal(f.db.sqlite.prepare('SELECT value FROM arios_settings WHERE key=?').get('telegram_offset').value, '301');
+});
+
+test('legacy hosting also accepts Groq only with a new key and matching default models', async t => {
+  const f=fixture(t);
+  const {projectId}=await configuredWorkspace(f);
+  const original=(await f.call('/api/voice')).data.integration;
+  for(const aiApiKey of [undefined,AI_KEY]) {
+    const denied=await f.post('/api/integrations',{aiBaseUrl:'https://api.groq.com/openai/v1',...(aiApiKey?{aiApiKey}:{})});
+    assert.equal(denied.status,400);
+  }
+  assert.deepEqual((await f.call('/api/voice')).data.integration,original);
+  const selected=await f.post('/api/integrations',{aiBaseUrl:'https://api.groq.com/openai/v1',aiApiKey:'dedicated-test-groq-key'});
+  assert.equal(selected.status,200);
+  assert.equal(selected.data.integration.aiModel,'openai/gpt-oss-20b');
+  assert.equal(selected.data.integration.transcriptionModel,'whisper-large-v3-turbo');
+  assert.equal(selected.data.integration.aiBaseUrl,'https://api.groq.com/openai/v1');
+  assert(!JSON.stringify(selected.data).includes('dedicated-test-groq-key'));
+  assert.equal(selected.data.telegram.botUsername,'AriosTestBot');
+  const answer=await f.post('/api/assistant',{projectId,message:'وضعیت پروژه چیست؟',history:[]});
+  assert.equal(answer.status,200);
+  assert.equal(answer.data.answer,'پاسخ فارسی آزمون گروک');
+});
+
+test('legacy Groq runtime configuration derives matching models when none were saved', async t => {
+  const f=fixture(t);
+  await f.call('/api/session');
+  f.env.ARIOS_AI_BASE_URL='https://api.groq.com/openai/v1';
+  f.env.ARIOS_AI_API_KEY='dedicated-test-groq-key';
+  const voice=await f.call('/api/voice');
+  assert.equal(voice.status,200);
+  assert.equal(voice.data.integration.aiModel,'openai/gpt-oss-20b');
+  assert.equal(voice.data.integration.transcriptionModel,'whisper-large-v3-turbo');
 });
 
 test('manager assistant receives operational context without finance or worker rate fields', async t => {

@@ -112,7 +112,13 @@ function renderNotifications(state, ctx) {
 function accountActions(person,ctx){
   if(!supabaseAuth(ctx)||person.role==='manager')return '';
   const id=ctx.e(person.id);
-  return person.deletedAt ? `<button class="button secondary small" data-restore-account="${id}">بازگرداندن دسترسی</button>` : `<button class="button secondary small" data-edit-account="${id}">ویرایش اطلاعات و نقش</button><button class="button secondary small" data-reset-account="${id}">بازنشانی رمز</button><button class="button danger small" data-archive-account="${id}">حذف دسترسی</button>`;
+  const status=person.loginNeedsReview ? '<span class="badge warning">ورود نیازمند هماهنگی نقش</span>' : person.loginEnabled===false ? '<span class="badge warning">ورود فعال نشده</span>' : person.loginEnabled===true ? '<span class="badge success">ورود فعال</span>' : '';
+  return person.deletedAt ? `<button class="button secondary small" data-restore-account="${id}">بازگرداندن دسترسی</button>` : `${status}<button class="button secondary small" data-edit-account="${id}">ویرایش اطلاعات و نقش</button>${accountLoginAction(person,ctx)}<button class="button danger small" data-archive-account="${id}">حذف دسترسی</button>`;
+}
+function accountLoginAction(person,ctx,resetLabel='بازنشانی رمز'){
+  if(person.loginNeedsReview)return '<small class="muted">ابتدا اطلاعات و نقش این فرد را ویرایش و دوباره ذخیره کنید</small>';
+  const id=ctx.e(person.id);
+  return person.loginEnabled===false ? `<button class="button primary small" data-activate-account="${id}">فعال‌سازی ورود</button>` : `<button class="button secondary small" data-reset-account="${id}">${resetLabel}</button>`;
 }
 function renderPasswordRequests(state,ctx){
   if(!supabaseAuth(ctx))return '';
@@ -122,7 +128,7 @@ function renderPasswordRequests(state,ctx){
 function passwordRequestRows(requests,state,ctx){
   return requests.filter(r=>r.status==='pending'&&state.users.some(u=>u.id===r.userId&&!u.deletedAt)).map(r=>{
     const person=state.users.find(u=>u.id===r.userId);
-    return `<article class="list-item"><div class="row between"><div><strong>${ctx.e(ctx.personName(r.userId))}</strong><p class="muted" dir="ltr">${ctx.e(r.identifier)}</p><small>${ctx.e(ctx.date(r.createdAt))}</small></div>${person.role==='manager'?'<p class="muted">حساب مالک محافظت شده است؛ بازیابی آن از <a class="text-link" href="https://supabase.com/dashboard/project/qategfabulrkvdckzmqp/auth/users" target="_blank" rel="noopener noreferrer">داشبورد رسمی احراز هویت</a> انجام می‌شود</p>':`<button class="button primary small" data-reset-account="${ctx.e(r.userId)}">تعیین رمز تازه</button>`}</div></article>`;
+    return `<article class="list-item"><div class="row between"><div><strong>${ctx.e(ctx.personName(r.userId))}</strong><p class="muted" dir="ltr">${ctx.e(r.identifier)}</p><small>${ctx.e(ctx.date(r.createdAt))}</small></div>${person.role==='manager'?'<p class="muted">حساب مالک محافظت شده است؛ بازیابی آن از <a class="text-link" href="https://supabase.com/dashboard/project/qategfabulrkvdckzmqp/auth/users" target="_blank" rel="noopener noreferrer">داشبورد رسمی احراز هویت</a> انجام می‌شود</p>':accountLoginAction(person,ctx,'تعیین رمز تازه')}</div></article>`;
   }).join('')||'<p class="muted">درخواست بازی در انتظار بررسی نیست</p>';
 }
 
@@ -234,8 +240,20 @@ function editReport(report, state, ctx) {
     onSubmit: data => ctx.mutate('report.update', { id: report.id, version: report.version, projectId: data.get('projectId'), date: data.get('date'), start: data.get('start'), end: data.get('end'), breakMinutes: Number(data.get('breakMinutes')), description: data.get('description'), output: data.get('output') })
   });
 }
+function openAccountActivation(id,state,ctx){
+  const person=state.users.find(u=>u.id===id);
+  if(!supabaseAuth(ctx)||!person||person.deletedAt||person.loginEnabled!==false||person.loginNeedsReview||!assignableRoles.includes(person.role))return;
+  ctx.modal({title:`فعال‌سازی ورود: ${person.name}`,submitLabel:'فعال‌سازی ورود همین فرد',body:`<p>حساب ورود برای <strong>${ctx.e(person.name)}</strong> ساخته می‌شود. نقش فعلی: <strong>${ctx.e(roleLabels[person.role]||person.role)}</strong></p><div class="notice">این کار روی همین پرونده انجام می‌شود؛ فرد دوباره ثبت نمی‌شود و پروژه‌ها، گزارش‌ها، نرخ‌ها و سوابق مالی حفظ می‌شوند. رمز تازه را فقط به صاحب حساب اعلام کنید؛ پیامک یا ایمیل خودکار ارسال نمی‌شود.</div>${field('شماره تماس',`<input name="phone" type="tel" dir="ltr" inputmode="tel" value="${ctx.e(person.phone||'')}" required maxlength="30" autocomplete="tel">`)}${field('نام کاربری',`<input name="username" dir="ltr" value="${ctx.e(person.username||'')}" minlength="3" maxlength="40" autocomplete="off" ${person.role==='warehouse'?'required':''}><small class="muted">برای انباردار الزامی؛ ۳ تا ۴۰ نویسه، با حرف شروع شود</small>`)}${field('رمز ورود','<input name="password" type="password" required minlength="6" maxlength="128" autocomplete="new-password"><small class="muted">حداقل ۶ نویسه</small>')}${field('تکرار رمز ورود','<input name="confirmPassword" type="password" required minlength="6" maxlength="128" autocomplete="new-password">')}`,onSubmit:async data=>{
+    const password=data.get('password');
+    if(typeof password!=='string'||password.length<6||password.length>128)throw Error('رمز ورود باید بین ۶ تا ۱۲۸ نویسه باشد');
+    if(password!==data.get('confirmPassword'))throw Error('رمز و تکرار آن یکسان نیستند');
+    return ctx.mutate('account.activate',{id:person.id,phone:data.get('phone'),username:data.get('username')||'',password});
+  }});
+}
 function openAccountPasswordReset(id,state,ctx){
   const person=state.users.find(u=>u.id===id);if(!supabaseAuth(ctx)||person?.deletedAt||!assignableRoles.includes(person?.role))return;
+  if(person.loginNeedsReview)return ctx.toast('ابتدا اطلاعات و نقش این فرد را ویرایش و دوباره ذخیره کنید');
+  if(person.loginEnabled===false)return openAccountActivation(id,state,ctx);
   ctx.modal({title:`بازنشانی رمز: ${person.name}`,submitLabel:'ثبت رمز تازه',body:`<div class="notice">ابتدا هویت فرد را بررسی کنید. پس از ذخیره، نشست‌های ورود قبلی او قطع می‌شوند. پیامک یا ایمیل خودکار ارسال نمی‌شود؛ رمز تازه را از مسیر مورد توافق فقط به صاحب حساب اعلام کنید.</div>${field('رمز تازه','<input name="password" type="password" required minlength="6" maxlength="128" autocomplete="new-password"><small class="muted">حداقل ۶ نویسه</small>')}${field('تکرار رمز تازه','<input name="confirmPassword" type="password" required minlength="6" maxlength="128" autocomplete="new-password">')}`,onSubmit:async data=>{
     if(data.get('password')!==data.get('confirmPassword'))throw Error('رمز و تکرار آن یکسان نیستند');
     const pending=memory('password-requests',state),previous=pending.requests;pending.requests=undefined;
@@ -278,6 +296,7 @@ export function wireOperations(page,state,ctx) {
     bind('[data-ticket]',el=>{const ticket=state.tickets.find(t=>t.id===el.dataset.ticket);if(ticket)openTicket(ticket,state,ctx);});
   }
   if(page==='team') {
+    bind('[data-activate-account]',el=>openAccountActivation(el.dataset.activateAccount,state,ctx));
     bind('[data-reset-account]',el=>openAccountPasswordReset(el.dataset.resetAccount,state,ctx));
     bind('[data-archive-account]',el=>{
       const person=state.users.find(u=>u.id===el.dataset.archiveAccount);if(!person||person.deletedAt||!assignableRoles.includes(person.role))return;
@@ -285,12 +304,12 @@ export function wireOperations(page,state,ctx) {
     });
     bind('[data-restore-account]',el=>{
       const person=state.users.find(u=>u.id===el.dataset.restoreAccount);if(!person?.deletedAt)return;
-      ctx.modal({title:`بازگرداندن دسترسی: ${person.name}`,submitLabel:'بازگرداندن حساب',body:`<p>این حساب با همان شماره تماس، نقش و سوابق دوباره فعال می‌شود. رمز فعلی حفظ می‌شود؛ در صورت نیاز پس از فعال‌سازی آن را بازنشانی کنید.</p>`,onSubmit:()=>ctx.mutate('account.restore',{id:person.id})});
+      ctx.modal({title:`بازگرداندن دسترسی: ${person.name}`,submitLabel:'بازگرداندن حساب',body:`<p>${person.loginEnabled===false?'پروندهٔ این فرد با همان شناسه، نقش و سوابق به فهرست فعال بازمی‌گردد. برای ورود به پنل، پس از بازگرداندن از «فعال‌سازی ورود» استفاده کنید.':'این حساب با همان شماره تماس، نقش و سوابق دوباره فعال می‌شود. رمز فعلی حفظ می‌شود؛ در صورت نیاز پس از فعال‌سازی آن را بازنشانی کنید.'}</p>`,onSubmit:()=>ctx.mutate('account.restore',{id:person.id})});
     });
     bind('[data-load-password-requests]',async button=>{
       const mount=document.querySelector('[data-password-requests-user]'),target=mount?.querySelector('[data-password-request-list]');if(!target)return;
       button.disabled=true;target.textContent='در حال دریافت درخواست‌ها…';
-      try{const response=await ctx.api.passwordResetRequests();if(!mount.isConnected||mount.dataset.passwordRequestsUser!==state.user.id)return;const m=memory('password-requests',state);m.requests=list(response.requests);target.innerHTML=passwordRequestRows(m.requests,state,ctx);target.querySelectorAll('[data-reset-account]').forEach(el=>el.addEventListener('click',()=>openAccountPasswordReset(el.dataset.resetAccount,state,ctx)));}
+      try{const response=await ctx.api.passwordResetRequests();if(!mount.isConnected||mount.dataset.passwordRequestsUser!==state.user.id)return;const m=memory('password-requests',state);m.requests=list(response.requests);target.innerHTML=passwordRequestRows(m.requests,state,ctx);target.querySelectorAll('[data-reset-account]').forEach(el=>el.addEventListener('click',()=>openAccountPasswordReset(el.dataset.resetAccount,state,ctx)));target.querySelectorAll('[data-activate-account]').forEach(el=>el.addEventListener('click',()=>openAccountActivation(el.dataset.activateAccount,state,ctx)));}
       catch(error){if(target.isConnected){target.textContent=error.message||'دریافت درخواست‌ها انجام نشد؛ دوباره تازه‌سازی کنید';target.setAttribute('role','alert');}}
       finally{if(button.isConnected)button.disabled=false;}
     });
@@ -307,7 +326,7 @@ export function wireOperations(page,state,ctx) {
     bind('[data-edit-account]',el=>{
       const person=state.users.find(item=>item.id===el.dataset.editAccount);
       if(!supabaseAuth(ctx)||!person||person.deletedAt||!assignableRoles.includes(person.role))return;
-      ctx.modal({title:`اطلاعات و نقش: ${person.name}`,submitLabel:'ذخیرهٔ اطلاعات و نقش',body:`${accountFields(person,ctx)}${field('واحد',`<input name="department" value="${ctx.e(person.department||'')}" maxlength="100">`)}${field('تخصص',`<input name="skill" value="${ctx.e(person.skill||'')}" maxlength="180">`)}<div class="notice">تغییر نقش، دسترسی‌های بعدی این حساب را تغییر می‌دهد. گزارش‌ها، صورت‌حساب‌ها و سوابق قبلی حذف نمی‌شوند. رمز عبور فعلی حفظ می‌شود.</div>`,onSubmit:data=>ctx.mutate('account.update',{id:person.id,name:data.get('name'),phone:data.get('phone'),role:data.get('role'),username:data.get('username')||'',department:data.get('department'),skill:data.get('skill')})});wireAccountFields();
+      ctx.modal({title:`اطلاعات و نقش: ${person.name}`,submitLabel:'ذخیرهٔ اطلاعات و نقش',body:`${accountFields(person,ctx)}${field('واحد',`<input name="department" value="${ctx.e(person.department||'')}" maxlength="100">`)}${field('تخصص',`<input name="skill" value="${ctx.e(person.skill||'')}" maxlength="180">`)}<div class="notice">تغییر نقش، دسترسی‌های بعدی این حساب را تغییر می‌دهد. گزارش‌ها، صورت‌حساب‌ها و سوابق قبلی حذف نمی‌شوند. ${person.loginEnabled===false?'این پرونده هنوز حساب ورود ندارد؛ ذخیرهٔ اطلاعات به‌تنهایی ورود را فعال نمی‌کند. برای تعیین رمز و ورود، از «فعال‌سازی ورود» استفاده کنید.':'رمز عبور فعلی حفظ می‌شود.'}</div>`,onSubmit:data=>ctx.mutate('account.update',{id:person.id,name:data.get('name'),phone:data.get('phone'),role:data.get('role'),username:data.get('username')||'',department:data.get('department'),skill:data.get('skill')})});wireAccountFields();
     });
     bind('[data-rate]',el=>{
       const worker=state.users.find(u=>u.id===el.dataset.rate);if(!worker)return;

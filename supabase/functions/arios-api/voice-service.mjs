@@ -54,11 +54,13 @@ async function rate(repo, key, limit, windowMs = 60000) {
 /** Integration credentials live only in service-accessible database settings. */
 export async function getConfig(repo, env = {}) {
   const saved = parseObject(await repo.getSetting('integrations'));
+  const aiBaseUrl = env.ARIOS_AI_BASE_URL || saved.aiBaseUrl || 'https://api.avalai.ir/v1';
+  const groq = aiBaseUrl === 'https://api.groq.com/openai/v1';
   return {
-    aiBaseUrl: env.ARIOS_AI_BASE_URL || saved.aiBaseUrl || 'https://api.avalai.ir/v1',
+    aiBaseUrl,
     aiApiKey: env.ARIOS_AI_API_KEY || saved.aiApiKey || '',
-    aiModel: env.ARIOS_AI_MODEL || saved.aiModel || '',
-    transcriptionModel: env.ARIOS_TRANSCRIPTION_MODEL || saved.transcriptionModel || 'whisper-1',
+    aiModel: env.ARIOS_AI_MODEL || saved.aiModel || (groq ? 'openai/gpt-oss-20b' : ''),
+    transcriptionModel: env.ARIOS_TRANSCRIPTION_MODEL || saved.transcriptionModel || (groq ? 'whisper-large-v3-turbo' : 'whisper-1'),
     telegramBotToken: env.ARIOS_TELEGRAM_BOT_TOKEN || saved.telegramBotToken || '',
     botUsername: saved.botUsername || '', botId: saved.botId || '',
   };
@@ -306,9 +308,12 @@ export async function handleVoice({ path, request, supabase, repo, user, fetcher
     manager(user); await rate(repo, `integrations:${user.id}`, 10);
     const current = await getConfig(repo, env);
     const base = payload.aiBaseUrl === undefined ? current.aiBaseUrl : text(payload.aiBaseUrl, 'نشانی سرویس', 120);
-    if (!['https://api.avalai.ir/v1', 'https://api.openai.com/v1'].includes(base)) fail('سرویس پشتیبانی‌شده را انتخاب کنید.');
+    if (!['https://api.avalai.ir/v1', 'https://api.openai.com/v1', 'https://api.groq.com/openai/v1'].includes(base)) fail('سرویس پشتیبانی‌شده را انتخاب کنید.');
     if (base !== current.aiBaseUrl && !payload.aiApiKey?.trim()) fail('برای تغییر سرویس، کلید اختصاصی همان سرویس را وارد کنید.');
-    const next = { ...current, aiBaseUrl: base, aiModel: payload.aiModel === undefined ? current.aiModel : text(payload.aiModel, 'مدل گزارش‌ساز', 100), transcriptionModel: payload.transcriptionModel === undefined ? current.transcriptionModel : text(payload.transcriptionModel, 'مدل رونویسی', 100) };
+    if (base !== current.aiBaseUrl && payload.aiApiKey?.trim() === current.aiApiKey) fail('کلید سرویس قبلی برای تغییر سرویس قابل استفاده نیست؛ کلید اختصاصی سرویس انتخاب‌شده را وارد کنید.');
+    const changedProvider = base !== current.aiBaseUrl;
+    const defaults = base === 'https://api.groq.com/openai/v1' ? { aiModel: 'openai/gpt-oss-20b', transcriptionModel: 'whisper-large-v3-turbo' } : { aiModel: 'gpt-4o-mini', transcriptionModel: 'whisper-1' };
+    const next = { ...current, aiBaseUrl: base, aiModel: payload.aiModel === undefined ? changedProvider ? defaults.aiModel : current.aiModel : text(payload.aiModel, 'مدل گزارش‌ساز', 100), transcriptionModel: payload.transcriptionModel === undefined ? changedProvider ? defaults.transcriptionModel : current.transcriptionModel : text(payload.transcriptionModel, 'مدل رونویسی', 100) };
     for (const model of [next.aiModel, next.transcriptionModel]) if (model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(model)) fail('شناسه مدل هوش مصنوعی معتبر نیست.');
     if (payload.aiApiKey?.trim()) { next.aiApiKey = text(payload.aiApiKey, 'کلید هوش مصنوعی', 512); if (/\s/.test(next.aiApiKey)) fail('کلید هوش مصنوعی معتبر نیست.'); }
     if (payload.telegramBotToken?.trim()) {

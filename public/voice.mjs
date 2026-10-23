@@ -11,6 +11,38 @@ const field = (title,content,full=false) => `<label class="field ${full?'full':'
 function memory(userId){if(!views.has(userId))views.set(userId,{loaded:false,loading:false,data:null,error:'',query:'',filter:'all',syncing:false,text:'',projectId:'',pendingRender:false,testing:false,diagnostics:null});return views.get(userId);}
 const current = userId => document.querySelector('[data-voice-user]')?.dataset.voiceUser===userId;
 const isManager = state => state.user.role==='manager';
+const AI_SERVICES = Object.freeze({
+ 'https://api.avalai.ir/v1':Object.freeze({label:'AvalAI',aiModel:'gpt-4o-mini',transcriptionModel:'whisper-1'}),
+ 'https://api.openai.com/v1':Object.freeze({label:'OpenAI',aiModel:'gpt-4o-mini',transcriptionModel:'whisper-1'}),
+ 'https://api.groq.com/openai/v1':Object.freeze({label:'Groq',aiModel:'openai/gpt-oss-20b',transcriptionModel:'whisper-large-v3-turbo'}),
+});
+const defaultProvider = 'https://api.avalai.ir/v1';
+export function voiceProviderDefaults(base){return Object.hasOwn(AI_SERVICES,base)?{...AI_SERVICES[base]}:null;}
+export function voiceConnectionPayload(form,current={}){
+ const payload=Object.fromEntries(form),service=voiceProviderDefaults(payload.aiBaseUrl);
+ if(!service)throw new Error('سرویس انتخاب‌شده معتبر نیست');
+ const key=typeof payload.aiApiKey==='string'?payload.aiApiKey.trim():'';
+ if((!current.aiConfigured||payload.aiBaseUrl!==(current.aiBaseUrl||defaultProvider))&&!key)throw new Error(`کلید اختصاصی ${service.label} را وارد کنید؛ کلید سرویس قبلی برای این اتصال استفاده نمی‌شود`);
+ if(key)payload.aiApiKey=key;else delete payload.aiApiKey;
+ if(typeof payload.telegramBotToken!=='string'||!payload.telegramBotToken.trim())delete payload.telegramBotToken;
+ return payload;
+}
+export function wireVoiceConnectionForm(form,current={}){
+ if(!form)return()=>{};
+ const select=form.querySelector('[name="aiBaseUrl"]'),key=form.querySelector('[name="aiApiKey"]'),report=form.querySelector('[name="aiModel"]'),transcription=form.querySelector('[name="transcriptionModel"]'),note=form.querySelector('[data-ai-provider-note]');
+ if(!select||!key)return()=>{};
+ const savedProvider=current.aiBaseUrl||defaultProvider;
+ const update=changed=>{
+  const service=voiceProviderDefaults(select.value);if(!service)return;
+  const sameProvider=select.value===savedProvider;
+  if(changed){key.value='';if(report)report.value=sameProvider?(current.aiModel||service.aiModel):service.aiModel;if(transcription)transcription.value=sameProvider?(current.transcriptionModel||service.transcriptionModel):service.transcriptionModel;}
+  key.required=!current.aiConfigured||!sameProvider;
+  key.placeholder=key.required?`کلید اختصاصی ${service.label}`:'کلید ذخیره شده؛ برای حفظ، خالی بگذارید';
+  if(note)note.textContent=service.label==='Groq'?'Groq پلن رایگان با سهمیه و محدودیت مصرف دارد؛ سهمیهٔ دقیق را در حساب خود بررسی کنید. برای اتصال، کلید اختصاصی Groq لازم است.':'کلید اختصاصی همین سرویس را وارد کنید. تغییر سرویس، کلید ذخیره‌شدهٔ سرویس قبلی را منتقل نمی‌کند.';
+ };
+ const change=()=>update(true);select.addEventListener('change',change);update(false);
+ return()=>select.removeEventListener('change',change);
+}
 function projectOptions(state,ctx,selected='',placeholder='انتخاب نشده؛ از متن تشخیص داده شود'){
   return `<option value="">${placeholder}</option>${state.projects.map(p=>`<option value="${ctx.e(p.id)}" ${selected===p.id?'selected':''}>${ctx.e(p.name)}</option>`).join('')}`;
 }
@@ -20,7 +52,7 @@ function diagnostics(m,ctx){
  if(m.testing)return '<p class="notice" role="status">در حال بررسی ساخت گزارش و تبدیل گفتار…</p>';
  if(!m.diagnostics)return '';
  if(m.diagnostics.error)return `<p class="alert" role="status">${ctx.e(m.diagnostics.error)}</p>`;
- return `<div class="voice-service-tests" role="status"><h3>نتیجهٔ بررسی سرویس</h3>${[['chat','ساخت گزارش و گفتگو'],['transcription','تبدیل گفتار به متن']].map(([key,label])=>{const stage=m.diagnostics[key]||{};return `<div class="voice-service-test"><strong>${label}</strong><span class="badge ${stage.ok?'green':'red'}">${stage.ok?'موفق':'نیازمند بررسی'}</span><p>${ctx.e(stage.message||(stage.ok?'سرویس پاسخ معتبر داد':'سرویس پاسخ معتبر نداد'))}</p></div>`;}).join('')}<small class="muted">این یک آزمون کوتاه اتصال است؛ کیفیت تبدیل ویس واقعی جداگانه بررسی می‌شود</small></div>`;
+ return `<div class="voice-service-tests" role="status"><h3>نتیجهٔ بررسی سرویس${m.diagnostics.provider?' · '+ctx.e(m.diagnostics.provider):''}</h3>${[['chat','ساخت گزارش و گفتگو'],['transcription','تبدیل گفتار به متن']].map(([key,label])=>{const stage=m.diagnostics[key]||{};return `<div class="voice-service-test"><strong>${label}</strong><span class="badge ${stage.ok?'green':'red'}">${stage.ok?'موفق':'نیازمند بررسی'}</span><p>${ctx.e(stage.message||(stage.ok?'سرویس پاسخ معتبر داد':'سرویس پاسخ معتبر نداد'))}</p></div>`;}).join('')}<small class="muted">این یک آزمون کوتاه اتصال است؛ کیفیت تبدیل ویس واقعی جداگانه بررسی می‌شود</small></div>`;
 }
 function updateDiagnostics(state,ctx){
  if(!current(state.user.id))return;const m=memory(state.user.id),target=document.querySelector('[data-voice-diagnostics]'),button=document.querySelector('[data-voice-test]'),configButton=document.querySelector('[data-voice-config]');
@@ -35,8 +67,8 @@ async function testConnections(state,ctx){
  finally{m.testing=false;updateDiagnostics(state,ctx);}
 }
 function integrations(state,ctx,data){
- const c=data.integration||{}, t=data.telegram||{};
- return `<section class="card voice-connections"><div class="card-head"><div><h2 class="card-title">اتصال‌های آریوس</h2><p class="muted">${isManager(state)?'تنظیمات اختصاصی همین فضای کار':'وضعیت سرویس‌های گزارش صوتی'}</p></div><span class="voice-connection-state ${c.aiConfigured?'connected':''}"><i></i>${c.aiConfigured?'سرویس تبدیل تنظیم شده':'سرویس تبدیل تنظیم نشده'}</span></div><div class="voice-connection-list"><div><span>تبدیل صوت و ساخت گزارش</span><strong>${c.aiConfigured?'کلید اختصاصی ثبت شده':'نیازمند کلید اختصاصی'}</strong></div><div><span>بات تلگرام</span><strong dir="ltr">${t.botUsername?'@'+ctx.e(t.botUsername):(t.configured?'تنظیم شده':'تنظیم نشده')}</strong></div><div><span>حساب تلگرام شما</span><strong>${t.linked?'متصل':'متصل نشده'}</strong></div></div>${isManager(state)?`<div class="actions"><button class="button secondary" data-voice-config ${memory(state.user.id).testing?'disabled':''}>${ctx.icon('settings')}تنظیم اتصال‌ها</button><button class="button secondary" data-voice-test ${memory(state.user.id).testing||ctx.api.isStatic?'disabled':''}>${memory(state.user.id).testing?'در حال بررسی…':'بررسی واقعی سرویس'}</button></div><div data-voice-diagnostics aria-live="polite" aria-busy="${memory(state.user.id).testing}">${diagnostics(memory(state.user.id),ctx)}</div>`:''}${t.configured?`<button class="button secondary" data-telegram-link>${ctx.icon('team')}${isManager(state)?'اتصال حساب عضو تیم':'اتصال حساب من'}</button>`:''}${isManager(state)&&list(t.links).length?`<div class="voice-linked-accounts"><h3>حساب‌های متصل</h3>${t.links.map(l=>`<div class="row between"><span>${ctx.e(l.name)}</span><button class="button secondary small" data-telegram-unlink="${ctx.e(l.userId)}">قطع اتصال</button></div>`).join('')}</div>`:t.linked?'<button class="button secondary small" data-telegram-unlink>قطع اتصال من</button>':''}</section>`;
+ const c=data.integration||{}, t=data.telegram||{},provider=voiceProviderDefaults(c.aiBaseUrl);
+ return `<section class="card voice-connections"><div class="card-head"><div><h2 class="card-title">اتصال‌های آریوس</h2><p class="muted">${isManager(state)?'تنظیمات اختصاصی همین فضای کار':'وضعیت سرویس‌های گزارش صوتی'}</p></div><span class="voice-connection-state ${c.aiConfigured?'connected':''}"><i></i>${c.aiConfigured?'سرویس تبدیل تنظیم شده':'سرویس تبدیل تنظیم نشده'}</span></div><div class="voice-connection-list"><div><span>تبدیل صوت و ساخت گزارش</span><strong>${c.aiConfigured?(provider?ctx.e(provider.label)+' · ':'')+'کلید اختصاصی ثبت شده':'نیازمند کلید اختصاصی'}</strong></div><div><span>بات تلگرام</span><strong dir="ltr">${t.botUsername?'@'+ctx.e(t.botUsername):(t.configured?'تنظیم شده':'تنظیم نشده')}</strong></div><div><span>حساب تلگرام شما</span><strong>${t.linked?'متصل':'متصل نشده'}</strong></div></div>${isManager(state)?`<div class="actions"><button class="button secondary" data-voice-config ${memory(state.user.id).testing?'disabled':''}>${ctx.icon('settings')}تنظیم اتصال‌ها</button><button class="button secondary" data-voice-test ${memory(state.user.id).testing||ctx.api.isStatic?'disabled':''}>${memory(state.user.id).testing?'در حال بررسی…':'بررسی واقعی سرویس'}</button></div><div data-voice-diagnostics aria-live="polite" aria-busy="${memory(state.user.id).testing}">${diagnostics(memory(state.user.id),ctx)}</div>`:''}${t.configured?`<button class="button secondary" data-telegram-link>${ctx.icon('team')}${isManager(state)?'اتصال حساب عضو تیم':'اتصال حساب من'}</button>`:''}${isManager(state)&&list(t.links).length?`<div class="voice-linked-accounts"><h3>حساب‌های متصل</h3>${t.links.map(l=>`<div class="row between"><span>${ctx.e(l.name)}</span><button class="button secondary small" data-telegram-unlink="${ctx.e(l.userId)}">قطع اتصال</button></div>`).join('')}</div>`:t.linked?'<button class="button secondary small" data-telegram-unlink>قطع اتصال من</button>':''}</section>`;
 }
 function drafts(state,ctx,m){
  const all=list(m.data?.drafts), rows=all.filter(d=>(m.filter==='all'||d.status===m.filter)&&(!m.query||[d.transcript,d.fields?.description,d.fields?.output,ctx.projectName(d.fields?.projectId)].join(' ').includes(m.query)));
@@ -57,8 +89,9 @@ async function reload(state,ctx,{quiet=false}={}){
 function listen(selector,fn){document.querySelectorAll(selector).forEach(el=>el.addEventListener('click',()=>fn(el)));}
 async function withButton(button,ctx,fn){if(button.disabled)return;button.disabled=true;try{await fn();}catch(error){ctx.toast(error.message||'عملیات انجام نشد.');}finally{if(button.isConnected)button.disabled=false;}}
 function connectionModal(state,ctx){
- const m=memory(state.user.id),c=m.data?.integration||{};
- ctx.modal({title:'اتصال سرویس‌ها به آریوس',submitLabel:'ذخیرهٔ اتصال‌ها',body:`<p class="muted">فقط اطلاعات اختصاصی همین پروژه را وارد کنید. کلیدها در خروجی داده‌ها و مرورگر ذخیره نمی‌شوند. خالی گذاشتن رمز، مقدار قبلی را حفظ می‌کند.</p><div class="form-grid">${field('سرویس تبدیل و هوش مصنوعی',`<select name="aiBaseUrl"><option value="https://api.avalai.ir/v1" ${c.aiBaseUrl==='https://api.avalai.ir/v1'?'selected':''}>AvalAI</option><option value="https://api.openai.com/v1" ${c.aiBaseUrl==='https://api.openai.com/v1'?'selected':''}>OpenAI</option></select>`,true)}${field('کلید اختصاصی سرویس',`<input name="aiApiKey" type="password" dir="ltr" autocomplete="new-password" maxlength="512" placeholder="${c.aiConfigured?'کلید ذخیره شده؛ برای حفظ، خالی بگذارید':'کلید API'}">`,true)}${field('مدل ساخت گزارش',`<input name="aiModel" dir="ltr" required maxlength="100" value="${ctx.e(c.aiModel||'gpt-4o-mini')}">`)}${field('مدل تبدیل گفتار',`<input name="transcriptionModel" dir="ltr" required maxlength="100" value="${ctx.e(c.transcriptionModel||'whisper-1')}">`)}${field('توکن بات تلگرام',`<input name="telegramBotToken" type="password" dir="ltr" autocomplete="new-password" maxlength="200" placeholder="${c.telegramConfigured?'توکن ذخیره شده؛ برای حفظ، خالی بگذارید':'توکن اختصاصی بات از BotFather'}">`,true)}</div><div class="notice">دریافت تلگرام از طریق همگام‌سازی انجام می‌شود. اگر این بات وب‌هوک فعالی داشته باشد، پیش از استفاده باید روش دریافت آن را در تلگرام بررسی کنید.</div>`,onSubmit:async form=>{const payload=Object.fromEntries(form);if(!payload.aiApiKey.trim())delete payload.aiApiKey;if(!payload.telegramBotToken.trim())delete payload.telegramBotToken;await ctx.api.integrations(payload);await reload(state,ctx);ctx.toast('تنظیم اتصال‌ها ذخیره شد.');}});
+ const m=memory(state.user.id),c=m.data?.integration||{},base=voiceProviderDefaults(c.aiBaseUrl)?c.aiBaseUrl:defaultProvider,defaults=voiceProviderDefaults(base);
+ ctx.modal({title:'اتصال سرویس‌ها به آریوس',submitLabel:'ذخیرهٔ اتصال‌ها',body:`<p class="muted">فقط اطلاعات اختصاصی همین پروژه را وارد کنید. کلیدها در خروجی داده‌ها و مرورگر ذخیره نمی‌شوند. برای حفظ کلید همان سرویس، ورودی را خالی بگذارید؛ تغییر سرویس به کلید اختصاصی تازه نیاز دارد.</p><div class="form-grid">${field('سرویس تبدیل و هوش مصنوعی',`<select name="aiBaseUrl">${Object.entries(AI_SERVICES).map(([url,service])=>`<option value="${url}" ${base===url?'selected':''}>${service.label}${service.label==='Groq'?' · دارای پلن رایگان':''}</option>`).join('')}</select>`,true)}${field('کلید اختصاصی سرویس',`<input name="aiApiKey" type="password" dir="ltr" autocomplete="new-password" maxlength="512" placeholder="${c.aiConfigured?'کلید ذخیره شده؛ برای حفظ، خالی بگذارید':'کلید API'}">`,true)}<p class="muted full" data-ai-provider-note></p>${field('مدل ساخت گزارش',`<input name="aiModel" dir="ltr" required maxlength="100" value="${ctx.e(c.aiModel||defaults.aiModel)}">`)}${field('مدل تبدیل گفتار',`<input name="transcriptionModel" dir="ltr" required maxlength="100" value="${ctx.e(c.transcriptionModel||defaults.transcriptionModel)}">`)}${field('توکن بات تلگرام',`<input name="telegramBotToken" type="password" dir="ltr" autocomplete="new-password" maxlength="200" placeholder="${c.telegramConfigured?'توکن ذخیره شده؛ برای حفظ، خالی بگذارید':'توکن اختصاصی بات از BotFather'}">`,true)}</div><p class="muted"><a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">ساخت یا دریافت کلید Groq</a> · پس از ذخیره، «بررسی واقعی سرویس» را اجرا کنید</p><div class="notice">دریافت تلگرام از طریق همگام‌سازی انجام می‌شود. اگر این بات وب‌هوک فعالی داشته باشد، پیش از استفاده باید روش دریافت آن را در تلگرام بررسی کنید.</div>`,onSubmit:async form=>{const payload=voiceConnectionPayload(form,c);await ctx.api.integrations(payload);await reload(state,ctx);ctx.toast('تنظیم اتصال‌ها ذخیره شد.');}});
+ wireVoiceConnectionForm(document.querySelector('#modal-form'),c);
 }
 function linkModal(state,ctx){
  const workers=state.users.filter(u=>!u.deletedAt&&(u.role==='worker'||u.id===state.user.id));

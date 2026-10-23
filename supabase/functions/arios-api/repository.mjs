@@ -52,6 +52,14 @@ export function createRepository(client) {
   const deleteSetting = async key => { await result(client.from('arios_settings').delete().eq('key', key)); };
   const getProfile = authUserId => result(client.from('arios_profiles').select(profileColumns).eq('auth_user_id', authUserId).maybeSingle());
   const getProfileByDomainId = domainUserId => result(client.from('arios_profiles').select(profileColumns).eq('domain_user_id', domainUserId).maybeSingle());
+  const listProfileLinks = async () => {
+    const links = [];
+    for (let offset = 0; ; offset += 1000) {
+      const page = await result(client.from('arios_profiles').select('domain_user_id,role').order('domain_user_id').range(offset, offset + 999));
+      links.push(...(page || []));
+      if (!page || page.length < 1000) return links;
+    }
+  };
   const createProfile = ({ authUserId, domainUserId, role }) => result(client.from('arios_profiles').insert({ auth_user_id: authUserId, domain_user_id: domainUserId, role }).select(profileColumns).single());
   const bootstrap = ({ authUserId, state, codeHash }) => rpc('arios_bootstrap', { p_auth_user_id: authUserId, p_state: state, p_code_hash: codeHash });
   const commitAccount = ({ expectedRevision, state, authUserId, domainUserId, role }) => rpc('arios_account_commit', { p_expected_revision: expectedRevision, p_state: state, p_auth_user_id: authUserId, p_domain_user_id: domainUserId, p_role: role });
@@ -120,7 +128,7 @@ export function createRepository(client) {
   const rateLimit = (key, limit, windowMs = 60000) => rpc('arios_rate_limit', { p_key: key, p_limit: limit, p_window_ms: windowMs });
   return {
     loadState, initState, mutateState, getSetting, setSetting, deleteSetting,
-    getProfile, getProfileByDomainId, createProfile, bootstrap, commitAccount, updateAccount, authSessionValid,
+    getProfile, getProfileByDomainId, listProfileLinks, createProfile, bootstrap, commitAccount, updateAccount, authSessionValid,
     listDrafts, getDraft, createDraft, updateDraft, claimDraft, pendingTelegramDrafts, expiredUploadDrafts, completedUploadDrafts, expiredAudioDrafts,
     listTelegramLinks, getTelegramLink, createLinkCode, consumeLinkCode, unlinkTelegram,
     ingestUpdates, listPendingUpdates, setUpdateStatus, hasTelegramHistory,

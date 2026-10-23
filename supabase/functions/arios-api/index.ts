@@ -1,10 +1,11 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
-import { applyAction, publicState } from './domain.mjs';
+import { applyAction } from './domain.mjs';
 import { createRepository } from './repository.mjs';
 import { handleVoice, getConfig, capabilities } from './voice-service.mjs';
-import { APIError, authenticate, bootstrap, createAccount, passwordLogin, updateAccount, archiveAccount, restoreAccount, resetAccountPassword, requestPasswordReset, listPasswordResetRequests, manager, rate, safeUser } from './auth.mjs';
+import { APIError, authenticate, bootstrap, createAccount, activateAccount, passwordLogin, updateAccount, archiveAccount, restoreAccount, resetAccountPassword, requestPasswordReset, listPasswordResetRequests, manager, rate, safeUser } from './auth.mjs';
 import { testAIConnection } from './voice-core.mjs';
 import { publicAssistant, publicProjects, workspaceAssistant } from './assistant-service.mjs';
+import { workspaceState } from './account-state.mjs';
 
 const fail = (message: string, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
@@ -99,7 +100,7 @@ export function createHandler(options: any = {}) {
         const config = await getConfig(repo);
         return json({ user: safeUser(user), demo: false, authMode: 'supabase', capabilities: { ...capabilities(config), hosted: true, supabaseAuth: true } });
       }
-      if (path === '/api/state' && request.method === 'GET') return json(publicState(state, user.id));
+      if (path === '/api/state' && request.method === 'GET') return json(await workspaceState(repo, state, user.id));
       if (path === '/api/actions' && request.method === 'POST') {
         const payload = await readJSON(request);
         if (typeof payload.action !== 'string' || !payload.payload || typeof payload.payload !== 'object' || Array.isArray(payload.payload)) fail('عملیات معتبر نیست.');
@@ -107,6 +108,8 @@ export function createHandler(options: any = {}) {
           ? await createAccount(client, repo, user, payload.payload)
           : payload.action === 'account.update'
             ? await updateAccount(client, repo, user, payload.payload)
+          : payload.action === 'account.activate'
+            ? await activateAccount(client, repo, user, payload.payload)
           : payload.action === 'account.archive'
             ? await archiveAccount(client, repo, user, payload.payload)
           : payload.action === 'account.restore'
@@ -114,7 +117,7 @@ export function createHandler(options: any = {}) {
           : payload.action === 'account.password.reset'
             ? await resetAccountPassword(client, repo, user, payload.payload)
           : await repo.mutateState((current: any) => applyAction(current, user.id, payload.action, payload.payload));
-        return json({ result: result.result, state: publicState(result.state, user.id) });
+        return json({ result: result.result, state: await workspaceState(repo, result.state, user.id) });
       }
       if (path === '/api/assistant' && request.method === 'POST') return json(await workspaceAssistant({ repo, user, payload: await readJSON(request), config: await getConfig(repo), fetcher }));
       if (path === '/api/integrations/test' && request.method === 'POST') {

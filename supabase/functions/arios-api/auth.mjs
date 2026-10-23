@@ -71,7 +71,7 @@ async function createAuthUser(client, { email, password, name, phone }) {
 }
 
 /** Never delete an Auth user after an uncertain database commit. */
-async function recoverCreatedAccount(client, repo, authUserId, domainUserId) {
+async function recoverCreatedAccount(client, repo, authUserId, domainUserId, { allowCleanup = false } = {}) {
   let profile;
   try { profile = await repo.getProfile(authUserId); }
   catch { fail('وضعیت ساخت حساب هنوز قطعی نیست؛ مدیر باید اتصال حساب را بررسی کند.', 503, 'ACCOUNT_SETUP_PENDING'); }
@@ -79,6 +79,9 @@ async function recoverCreatedAccount(client, repo, authUserId, domainUserId) {
     if (profile.domain_user_id !== domainUserId) fail('اتصال حساب نیازمند بررسی مدیر است.', 503, 'ACCOUNT_SETUP_PENDING');
     return true;
   }
+  // A missing profile can be a stale read while the original RPC is still
+  // completing. Only a definite non-commit permits deleting the fresh identity.
+  if (!allowCleanup) fail('نتیجهٔ ساخت حساب هنوز قطعی نیست؛ هویت ورود حفظ شده است و مدیر باید وضعیت اتصال را دوباره بررسی کند.', 503, 'ACCOUNT_SETUP_PENDING');
   try {
     const response = await client.auth.admin.deleteUser(authUserId);
     if (response.error) throw response.error;
@@ -103,10 +106,15 @@ export async function bootstrap(client, repo, payload) {
   if (await repo.getProfileByDomainId(owner.id)) fail('حساب مدیر قبلاً راه‌اندازی شده است.', 409, 'ALREADY_INITIALIZED');
   const password = passwordValue(payload.password);
   const authUser = await createAuthUser(client, { email, password, name: owner.name });
+  let commitUncertain = false;
   try {
-    if (!await repo.bootstrap({ authUserId: authUser.id, state, codeHash })) fail('راه‌اندازی حساب کامل نشد؛ دوباره تلاش کنید.', 409, 'BOOTSTRAP_CONFLICT');
+    commitUncertain = true;
+    const committed = await repo.bootstrap({ authUserId: authUser.id, state, codeHash });
+    if (typeof committed !== 'boolean') fail('پاسخ راه‌اندازی حساب قطعی نیست؛ وضعیت اتصال باید دوباره بررسی شود.', 503, 'ACCOUNT_SETUP_PENDING');
+    commitUncertain = false;
+    if (!committed) fail('راه‌اندازی حساب کامل نشد؛ دوباره تلاش کنید.', 409, 'BOOTSTRAP_CONFLICT');
   } catch (error) {
-    if (!await recoverCreatedAccount(client, repo, authUser.id, owner.id)) throw error;
+    if (!await recoverCreatedAccount(client, repo, authUser.id, owner.id, { allowCleanup: !commitUncertain })) throw error;
   }
   return { ok: true, user: safeUser(owner) };
 }
@@ -152,17 +160,22 @@ export async function createAccount(client, repo, actor, payload) {
   // Contact numbers can change or be reused. Keep the private Auth identity
   // immutable so a previous phone alias cannot reserve that number forever.
   const authUser = await createAuthUser(client, { email: candidate.email || `account.${domainUserId.slice(2)}@phone.arios.invalid`, name: candidate.name, phone: candidate.phone, password });
+  let commitUncertain = false;
   try {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const current = attempt === 0 ? loaded : await repo.loadState();
       if (!current) fail('فضای کار آماده نیست.', 503, 'STATE_NOT_INITIALIZED');
       const state = structuredClone(current.state);
       const user = accountInState(state, actor.id, payload, domainUserId);
-      if (await repo.commitAccount({ expectedRevision: current.revision, state, authUserId: authUser.id, domainUserId, role: user.role })) return { result: safeUser(user), state };
+      commitUncertain = true;
+      const committed = await repo.commitAccount({ expectedRevision: current.revision, state, authUserId: authUser.id, domainUserId, role: user.role });
+      if (typeof committed !== 'boolean') fail('پاسخ ساخت حساب قطعی نیست؛ وضعیت اتصال باید دوباره بررسی شود.', 503, 'ACCOUNT_SETUP_PENDING');
+      commitUncertain = false;
+      if (committed) return { result: safeUser(user), state };
     }
     fail('اطلاعات هم‌زمان تغییر کرد؛ دوباره تلاش کنید.', 409, 'STATE_CONFLICT');
   } catch (error) {
-    if (await recoverCreatedAccount(client, repo, authUser.id, domainUserId)) {
+    if (await recoverCreatedAccount(client, repo, authUser.id, domainUserId, { allowCleanup: !commitUncertain })) {
       const current = await repo.loadState();
       if (!current) fail('وضعیت ساخت حساب نیازمند بررسی است.', 503, 'ACCOUNT_SETUP_PENDING');
       return { result: safeUser(current.state.users.find(user => user.id === domainUserId)), state: current.state };
@@ -181,8 +194,9 @@ export async function updateAccount(client, repo, actor, payload) {
     const state = structuredClone(loaded.state);
     const result = applyAction(state, actor.id, 'account.update', payload);
     const profile = await repo.getProfileByDomainId(result.id);
-    if (!profile) fail('اتصال ورود این حساب نیازمند بررسی مدیر است.', 409, 'ACCOUNT_PROFILE_MISSING');
-    if (await repo.updateAccount({ expectedRevision: loaded.revision, state, authUserId: profile.auth_user_id, domainUserId: result.id, role: result.role })) return { result: { ...safeUser(result), warnings: result.warnings || [] }, state };
+    // Legacy staff records may predate Supabase Auth. Editing their contact or
+    // role does not require creating a login or changing somebody's password.
+    if (await repo.updateAccount({ expectedRevision: loaded.revision, state, authUserId: profile?.auth_user_id ?? null, domainUserId: result.id, role: result.role })) return { result: { ...safeUser(result), warnings: result.warnings || [], loginEnabled: Boolean(profile) }, state };
   }
   fail('اطلاعات هم‌زمان تغییر کرد؛ دوباره تلاش کنید.', 409, 'STATE_CONFLICT');
 }
@@ -265,6 +279,63 @@ async function withPrivateLock(repo, name, callback) {
   finally { await repo.releaseLock(name, token).catch(() => {}); }
 }
 
+/** Add an explicitly requested login to an existing record, preserving its id. */
+export async function activateAccount(client, repo, actor, payload) {
+  manager(actor);
+  await rate(repo, `account-activate:${actor.id}`, 10);
+  const id = text(payload.id, 'شناسه حساب', 120), password = passwordValue(payload.password);
+  let phone;
+  try { phone = normalizePhone(payload.phone); }
+  catch { fail('برای فعال‌سازی ورود، شماره تماس معتبر وارد کنید.', 400, 'INVALID_PHONE'); }
+  return withPrivateLock(repo, `account-security:${id}`, async () => {
+    const candidate = async loaded => {
+      if (!loaded) fail('فضای کار آماده نیست.', 503, 'STATE_NOT_INITIALIZED');
+      const current = loaded.state.users.find(person => person.id === id);
+      if (!current || current.deletedAt) fail('پروندهٔ فعال یافت نشد.', 404, 'NOT_FOUND');
+      if (current.role === 'manager') fail('فعال‌سازی مدیر از این مسیر مجاز نیست.', 403, 'MANAGER_ROLE_PROTECTED');
+      if (await repo.getProfileByDomainId(id)) fail('ورود این حساب قبلاً فعال است؛ برای تغییر رمز از بازنشانی رمز استفاده کنید.', 409, 'ACCOUNT_ALREADY_ACTIVE');
+      const state = structuredClone(loaded.state);
+      const projects = state.projects;
+      const user = applyAction(state, actor.id, 'account.update', {
+        id, phone, ...(payload.username === undefined ? {} : { username: payload.username }),
+      });
+      // Activation validates identity fields using the normal account rules,
+      // but must not reinterpret historical project assignments or roles.
+      state.projects = projects;
+      return { state, user };
+    };
+    let loaded = await repo.loadState();
+    const preview = await candidate(loaded);
+    // A legacy contact email is not proof of ownership of an existing Auth
+    // identity. Create a fresh private alias rather than taking over that email.
+    const authUser = await createAuthUser(client, {
+      email: `account.${crypto.randomUUID()}@phone.arios.invalid`,
+      name: preview.user.name, phone: preview.user.phone, password,
+    });
+    let commitUncertain = false;
+    try {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (attempt) loaded = await repo.loadState();
+        const next = await candidate(loaded);
+        next.state.audit.push({ id: crypto.randomUUID(), actorId: actor.id, action: 'account.activate', entityId: id, createdAt: new Date().toISOString(), description: 'ورود پروندهٔ موجود بدون تغییر سوابق فعال شد.' });
+        commitUncertain = true;
+        const committed = await repo.commitAccount({ expectedRevision: loaded.revision, state: next.state, authUserId: authUser.id, domainUserId: id, role: next.user.role });
+        if (typeof committed !== 'boolean') fail('پاسخ فعال‌سازی ورود قطعی نیست؛ وضعیت اتصال باید دوباره بررسی شود.', 503, 'ACCOUNT_SETUP_PENDING');
+        commitUncertain = false;
+        if (committed) return { result: { ...safeUser(next.user), loginEnabled: true }, state: next.state };
+      }
+      fail('اطلاعات هم‌زمان تغییر کرد؛ دوباره تلاش کنید.', 409, 'STATE_CONFLICT');
+    } catch (error) {
+      if (await recoverCreatedAccount(client, repo, authUser.id, id, { allowCleanup: !commitUncertain })) {
+        const current = await repo.loadState(), user = current?.state.users.find(person => person.id === id);
+        if (!user) fail('نتیجهٔ فعال‌سازی ورود نیازمند بررسی است؛ دوباره تلاش کنید.', 503, 'ACCOUNT_SETUP_PENDING');
+        return { result: { ...safeUser(user), loginEnabled: true }, state: current.state };
+      }
+      throw error;
+    }
+  });
+}
+
 async function accountStatus(client, repo, actor, payload, action) {
   manager(actor);
   await rate(repo, `${action}:${actor.id}`, 20);
@@ -273,9 +344,9 @@ async function accountStatus(client, repo, actor, payload, action) {
     const preview = await repo.loadState();
     if (!preview) fail('فضای کار آماده نیست.', 503, 'STATE_NOT_INITIALIZED');
     applyAction(structuredClone(preview.state), actor.id, action, { id });
-    if (!await repo.getProfileByDomainId(id)) fail('اتصال ورود حساب نیازمند بررسی مدیر است.', 409, 'ACCOUNT_PROFILE_MISSING');
+    let authSecurity = Boolean(await repo.getProfileByDomainId(id));
     // A bounded block denies old sessions even if the database reply becomes uncertain.
-    await repo.setSetting(`auth-security:${id}`, { blocked: true, blockUntil: Date.now() + 90000, validAfter: new Date().toISOString() });
+    if (authSecurity) await repo.setSetting(`auth-security:${id}`, { blocked: true, blockUntil: Date.now() + 90000, validAfter: new Date().toISOString() });
     let changed;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const loaded = await repo.loadState();
@@ -283,11 +354,14 @@ async function accountStatus(client, repo, actor, payload, action) {
       const state = structuredClone(loaded.state);
       const result = applyAction(state, actor.id, action, { id });
       const profile = await repo.getProfileByDomainId(result.id);
-      if (!profile) fail('اتصال ورود حساب نیازمند بررسی مدیر است.', 409, 'ACCOUNT_PROFILE_MISSING');
-      if (await repo.updateAccount({ expectedRevision: loaded.revision, state, authUserId: profile.auth_user_id, domainUserId: result.id, role: result.role })) { changed = { result: safeUser(result), state }; break; }
+      if (profile && !authSecurity) {
+        await repo.setSetting(`auth-security:${id}`, { blocked: true, blockUntil: Date.now() + 90000, validAfter: new Date().toISOString() });
+        authSecurity = true;
+      }
+      if (await repo.updateAccount({ expectedRevision: loaded.revision, state, authUserId: profile?.auth_user_id ?? null, domainUserId: result.id, role: result.role })) { changed = { result: { ...safeUser(result), loginEnabled: Boolean(profile) }, state }; break; }
     }
     if (!changed) fail('اطلاعات هم‌زمان تغییر کرد؛ دوباره تلاش کنید.', 409, 'STATE_CONFLICT');
-    await repo.setSetting(`auth-security:${id}`, { blocked: action === 'account.archive', validAfter: new Date().toISOString() });
+    if (authSecurity) await repo.setSetting(`auth-security:${id}`, { blocked: action === 'account.archive', validAfter: new Date().toISOString() });
     return changed;
   });
 }
@@ -330,7 +404,8 @@ export async function resetAccountPassword(client, repo, actor, payload) {
     if (!user || user.deletedAt) fail('حساب فعال یافت نشد.', 404, 'NOT_FOUND');
     if (user.role === 'manager') fail('رمز حساب مدیر از این مسیر تغییر نمی‌کند.', 403, 'MANAGER_ROLE_PROTECTED');
     const profile = await repo.getProfileByDomainId(id);
-    if (!profile || profile.role !== user.role) fail('اتصال حساب نیازمند بررسی مدیر است.', 409, 'ACCOUNT_PROFILE_MISSING');
+    if (!profile) fail('این پرونده هنوز حساب ورود ندارد؛ ابتدا «فعال‌سازی ورود» را برای همان فرد انجام دهید.', 409, 'ACCOUNT_NEEDS_ACTIVATION');
+    if (profile.role !== user.role) fail('نقش حساب ورود با پرونده هماهنگ نیست؛ اطلاعات و نقش همین حساب را یک‌بار ذخیره کنید و سپس رمز را بازنشانی کنید.', 409, 'ACCOUNT_PROFILE_MISMATCH');
     const securityKey = `auth-security:${id}`, previousSecurity = await repo.getSetting(securityKey);
     // Keep the block durable until the final cutoff is saved. A timed unblock
     // could otherwise admit a session created while the password was changing.

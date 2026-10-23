@@ -64,7 +64,7 @@ test('Edge health reports the released backend version without exposing integrat
   assert.equal(f.calls.setting, 0); assert.equal(f.calls.provider, 0);
 });
 
-function accountFixture(role = 'manager') {
+function accountFixture(role = 'manager', { legacy = false } = {}) {
   const users = [
     { id: 'manager', role: 'manager', name: 'مدیر' },
     { id: 'worker', role: 'worker', name: 'همکار' },
@@ -72,12 +72,16 @@ function accountFixture(role = 'manager') {
   ];
   const state = Object.fromEntries(['projects', 'reports', 'materials', 'invoices', 'messages', 'tickets', 'inventory', 'receipts', 'audit'].map(name => [name, []]));
   state.users = users;
+  const profiles = new Map(users.filter(user => !legacy || user.id !== 'target').map(user => [user.id, { auth_user_id: 'auth-' + user.id, domain_user_id: user.id, role: user.role }]));
   const settings = new Map(), calls = { auth: 0, reset: 0, provider: 0 };
   const repo = {
     loadState: async () => ({ state, revision: 1 }),
     rateLimit: async () => ({ allowed: true }),
-    getProfile: async () => ({ auth_user_id: 'auth-' + role, domain_user_id: role, role }),
-    getProfileByDomainId: async id => ({ auth_user_id: 'auth-' + id, domain_user_id: id, role: users.find(user => user.id === id)?.role }),
+    getProfile: async authId => [...profiles.values()].find(profile => profile.auth_user_id === authId),
+    getProfileByDomainId: async id => profiles.get(id),
+    listProfileLinks: async () => [...profiles.values()].map(({ domain_user_id, role }) => ({ domain_user_id, role })),
+    updateAccount: async input => { assert.equal(input.authUserId, profiles.get(input.domainUserId)?.auth_user_id || null); Object.assign(state, input.state); if(profiles.has(input.domainUserId))profiles.get(input.domainUserId).role=input.role; return true; },
+    commitAccount: async input => { assert(!profiles.has(input.domainUserId)); Object.assign(state,input.state); profiles.set(input.domainUserId,{auth_user_id:input.authUserId,domain_user_id:input.domainUserId,role:input.role}); return true; },
     getSetting: async key => settings.get(key),
     setSetting: async (key, value) => settings.set(key, value),
     acquireLock: async () => true,
@@ -85,7 +89,7 @@ function accountFixture(role = 'manager') {
   };
   const client = { auth: {
     getUser: async () => { calls.auth++; return { data: { user: { id: 'auth-' + role } } }; },
-    admin: { updateUserById: async (id, values) => { calls.reset++; assert.deepEqual(values, { password: 'simple6' }); return { data: { user: { id } } }; } },
+    admin: { createUser: async () => ({data:{user:{id:'new-activated-auth'}}}), updateUserById: async (id, values) => { calls.reset++; assert.deepEqual(values, { password: 'simple6' }); return { data: { user: { id } } }; } },
   } };
   const handle = createHandler({ repo, client, fetcher: () => { calls.provider++; assert.fail('Account routes cannot call an AI provider'); } });
   const request = (path, payload, authenticated = true) => new Request('https://edge.example/functions/v1/arios-api' + path, {
@@ -134,11 +138,50 @@ test('Edge manager password reset invokes the protected Auth helper and returns 
 });
 
 test('Edge account security actions reject team members before invoking Auth mutations', async () => {
-  for (const action of ['account.archive', 'account.restore', 'account.password.reset']) {
+  for (const action of ['account.archive', 'account.restore', 'account.password.reset', 'account.activate']) {
     const f = accountFixture('worker');
     const response = await f.handle(f.request('/actions', { action, payload: { id: 'target', password: 'simple6' } }));
     assert.equal(response.status, 403, action);
     assert.equal((await response.json()).code, 'FORBIDDEN');
     assert.equal(f.calls.reset, 0); assert.equal(f.settings.size, 0);
   }
+});
+
+test('Edge manager state distinguishes profile-only staff while other roles cannot read login status', async () => {
+  const manager=accountFixture('manager',{legacy:true});
+  const result=await manager.handle(manager.request('/state'));
+  assert.equal(result.status,200);
+  const body=await result.json();
+  assert.equal(body.users.find(user=>user.id==='target').loginEnabled,false);
+  assert.equal(body.users.find(user=>user.id==='manager').loginEnabled,true);
+  assert(!JSON.stringify(body).includes('auth-manager'));
+  const worker=accountFixture('worker',{legacy:true});
+  const other=await worker.handle(worker.request('/state'));
+  assert.equal(other.status,200);
+  assert((await other.json()).users.every(user=>user.loginEnabled===undefined));
+});
+
+test('Edge saves a legacy profile edit and role transition without inventing a login or resetting a password', async () => {
+  const f=accountFixture('manager',{legacy:true});
+  const result=await f.handle(f.request('/actions',{action:'account.update',payload:{id:'target',name:'همکار ویرایش‌شده',phone:'09123456789',role:'worker'}}));
+  assert.equal(result.status,200);
+  const body=await result.json(), person=body.state.users.find(user=>user.id==='target');
+  assert.equal(person.name,'همکار ویرایش‌شده');
+  assert.equal(person.role,'worker');
+  assert.equal(person.loginEnabled,false);
+  assert.equal(body.state.users.length,3);
+  assert.equal(f.calls.reset,0);
+});
+
+test('Edge explicit activation keeps the same profile and turns on its login without leaking the new password', async () => {
+  const f=accountFixture('manager',{legacy:true});
+  const result=await f.handle(f.request('/actions',{action:'account.activate',payload:{id:'target',phone:'09123456789',username:'staff.one',password:'simple6'}}));
+  assert.equal(result.status,200);
+  const body=await result.json();
+  assert.equal(body.result.id,'target');
+  assert.equal(body.state.users.length,3);
+  assert.equal(body.state.users.find(user=>user.id==='target').loginEnabled,true);
+  assert.equal(body.state.users.find(user=>user.id==='target').username,'staff.one');
+  assert(!JSON.stringify(body).includes('simple6'));
+  assert.equal(f.calls.reset,0);
 });
