@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { handleVoice, getConfig, safeConfig, syncTelegram } from '../supabase/functions/arios-api/voice-service.mjs';
+import { readFileSync } from 'node:fs';
+import { handleVoice, getConfig, safeConfig, syncTelegram, processDraft } from '../supabase/functions/arios-api/voice-service.mjs';
 import { createSeedState, DomainError } from '../supabase/functions/arios-api/domain.mjs';
 
 const TOKEN = '123456:arios_test_token_123456789012345';
@@ -62,8 +63,8 @@ function fixture() {
       if (url.pathname.endsWith('/getMe')) return response({ ok: true, result: { id: 123456, is_bot: true, username: 'AriosTestBot' } });
       if (url.pathname.endsWith('/getWebhookInfo')) return response({ ok: true, result: { url: '' } });
       if (url.pathname.endsWith('/getUpdates')) return response({ ok: true, result: mock.incoming });
-      if (url.pathname.endsWith('/getFile')) return response({ ok: true, result: { file_path: 'voice/test.ogg', file_size: OGG.byteLength } });
-      if (url.pathname.includes('/file/bot')) return new Response(OGG, { headers: { 'Content-Type': 'audio/ogg' } });
+      if (url.pathname.endsWith('/getFile')) return response({ ok: true, result: { file_path: 'voice/test.ogg', file_size: (mock.audio || OGG).byteLength } });
+      if (url.pathname.includes('/file/bot')) return new Response(mock.audio || OGG, { headers: { 'Content-Type': 'audio/ogg' } });
     }
     if (url.pathname.endsWith('/audio/transcriptions')) return response({ text: TRANSCRIPT });
     if (url.pathname.endsWith('/chat/completions')) {
@@ -250,5 +251,52 @@ test('playback links never outlive retention and reject unexpected signing desti
     bucket.createSignedUrl = async () => ({ data: { signedUrl: url }, error: null });
     const invalid = await f.call('/api/voice/audio', { id: 'nearly-expired' }, 'worker');
     assert.equal(invalid.status, 503); assert.equal(invalid.data.code, 'AUDIO_URL_FAILED'); assert.equal(JSON.stringify(invalid.data).includes('private'), false);
+  }
+});
+
+test('a real Telegram Opus file passes storage, transcription and report checkpoints; retry preserves its transcript', async () => {
+  const f = fixture();
+  f.mock.audio = new Uint8Array(readFileSync(new URL('./fixtures/telegram-opus.ogg', import.meta.url)));
+  await f.repo.createDraft({ id: 'telegram_real', userId: 'worker', source: 'telegram', fileId: 'fixture-file', sourceMetadata: { expected_size: f.mock.audio.length } });
+  let transcriptions = 0;
+  const fetcher = async (url, options) => {
+    if (String(url).endsWith('/audio/transcriptions')) {
+      transcriptions++;
+      assert.equal(f.drafts.get('telegram_real').source_metadata.processing.stage, 'transcription');
+      assert.deepEqual(new Uint8Array(await options.body.get('file').arrayBuffer()), f.mock.audio);
+    }
+    if (String(url).endsWith('/chat/completions')) {
+      const row = f.drafts.get('telegram_real');
+      assert.equal(row.source_metadata.processing.stage, 'report');
+      assert.equal(row.transcript, TRANSCRIPT);
+    }
+    return f.fetcher(url, options);
+  };
+  f.mock.extractionFailure = true;
+  const failed = await processDraft({ repo: f.repo, supabase: f.supabase, id: 'telegram_real', fetcher });
+  assert.equal(failed.status, 'failed');
+  assert.deepEqual(failed.processing, { stage: 'report', code: 'INVALID_REPORT_OUTPUT', provider: 'AvalAI' });
+  assert.equal(failed.audio.available, true);
+  f.mock.extractionFailure = false;
+  const retried = await processDraft({ repo: f.repo, supabase: f.supabase, id: 'telegram_real', fetcher });
+  assert.equal(retried.status, 'ready');
+  assert.deepEqual(retried.processing, { stage: 'complete', code: null, provider: 'AvalAI' });
+  assert.equal(transcriptions, 1, 'report retry must reuse the durable transcript');
+  assert.equal(f.mock.storageWrites.length, 1);
+  assert.equal(f.objects.get('voice/worker/telegram_real.ogg').bytes.length, f.mock.audio.length);
+  assert.ok(!JSON.stringify(retried).includes(KEY));
+  assert.ok(!JSON.stringify(retried).includes(TOKEN));
+});
+
+test('unclassified processing errors cannot leak exception messages or identifiers in diagnostics', async t => {
+  const f = fixture(), warnings = [];
+  t.mock.method(console, 'warn', value => warnings.push(value));
+  await f.repo.createDraft({ id: 'diagnostic-safe', userId: 'worker', source: 'text', transcript: TRANSCRIPT });
+  f.repo.loadState = async () => { const error = new Error(KEY + TOKEN); error.status = 502; error.code = KEY; throw error; };
+  const failed = await processDraft({ repo: f.repo, supabase: f.supabase, id: 'diagnostic-safe', fetcher: f.fetcher });
+  assert.equal(failed.status, 'failed');
+  assert.deepEqual(failed.processing, { stage: 'settings', code: null, provider: 'AvalAI' });
+  for (const value of [JSON.stringify(failed), ...warnings]) {
+    assert.ok(!value.includes(KEY)); assert.ok(!value.includes(TOKEN));
   }
 });

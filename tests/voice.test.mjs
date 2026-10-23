@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { transcribeAudio, extractReport, fetchTelegramUpdates, downloadTelegramVoice, VoiceError, MAX_AUDIO_BYTES } from '../worker/voice.mjs';
 
 const config = { aiBaseUrl: 'https://api.avalai.ir/v1', aiApiKey: 'test-only-arios-key', aiModel: 'gpt-4o-mini', transcriptionModel: 'whisper-1' };
@@ -139,6 +140,30 @@ test('Telegram voice download preserves OGG and accepts missing MIME only with s
     return new Response(audio, { headers: { 'Content-Type': 'application/octet-stream' } });
   } });
   assert.equal(calls.length, 2); assert.deepEqual(result.bytes, audio); assert.equal(result.mimeType, 'audio/ogg'); assert.equal(result.fileName, 'arios-voice.ogg');
+});
+
+test('Telegram recognizes an actual Opus recording despite wrong MIME and generated filenames', async () => {
+  // Synthetic tone generated with FFmpeg, containing valid Ogg pages and Opus audio.
+  const bytes = new Uint8Array(await readFile(new URL('./fixtures/telegram-opus.ogg', import.meta.url)));
+  assert.ok(bytes.byteLength > 1000);
+  for (const mimeType of ['audio/oga', 'audio/x-ogg', 'audio/mpeg', 'application/octet-stream', 'text/plain', 'application/pdf']) {
+    const result = await downloadTelegramVoice({ token, fileId: 'voice-id', fetcher: async url => url.endsWith('/getFile') ? json({ ok: true, result: { file_path: 'voice/file_123.bin', file_size: bytes.byteLength } }) : new Response(bytes, { headers: { 'Content-Type': mimeType } }) });
+    assert.equal(result.mimeType, 'audio/ogg'); assert.equal(result.fileName, 'arios-voice.ogg');
+    assert.deepEqual(result.bytes, bytes, 'normalization must preserve the original audio bytes');
+    assert.equal(await transcribeAudio({ ...result, config, fetcher: async (url, init) => {
+      const file = init.body.get('file');
+      assert.equal(file.type, 'audio/ogg'); assert.equal(file.name, 'arios-voice.ogg');
+      assert.deepEqual(new Uint8Array(await file.arrayBuffer()), bytes);
+      return json({ text: 'صوت آزمایشی' });
+    } }), 'صوت آزمایشی');
+  }
+});
+
+test('Telegram never treats an unrecognized binary or an arbitrary MIME alias as audio', async () => {
+  const bodies = [new TextEncoder().encode('%PDF-1.7\nnot audio'), new TextEncoder().encode('<html>error</html>'), new Uint8Array(100)];
+  for (const bytes of bodies) for (const mimeType of ['audio/oga', 'audio/x-ogg', 'application/octet-stream', 'application/pdf']) {
+    await assert.rejects(downloadTelegramVoice({ token, fileId: 'voice-id', fetcher: async url => url.endsWith('/getFile') ? json({ ok: true, result: { file_path: 'voice/generated.bin' } }) : new Response(bytes, { headers: { 'Content-Type': mimeType } }) }), errorCode('UNSUPPORTED_AUDIO'));
+  }
 });
 
 test('Telegram rejects unsafe file paths and excessive metadata before downloading', async () => {

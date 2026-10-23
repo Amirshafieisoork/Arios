@@ -4,6 +4,9 @@ import { transcribeAudio, extractReport, fetchTelegramUpdates, downloadTelegramV
 const BUCKET = 'arios-audio';
 const AUDIO_RETENTION_MS = 7 * 86400000;
 const PLAYBACK_URL_SECONDS = 300;
+const PROCESSING_STAGES = new Set(['settings', 'audio', 'transcription', 'report', 'complete']);
+const PROCESSING_CODES = new Set(['AI_NOT_CONFIGURED', 'AI_CONFIG_INVALID', 'AI_AUTH_FAILED', 'AI_REGION_UNSUPPORTED', 'AI_QUOTA_EXCEEDED', 'AI_MODEL_UNAVAILABLE', 'AI_UNSUPPORTED_PARAMETER', 'AI_AUDIO_UNSUPPORTED', 'AI_INVALID_OUTPUT', 'AI_OUTPUT_TRUNCATED', 'UPSTREAM_FAILED', 'UPSTREAM_RATE_LIMITED', 'UPSTREAM_RESPONSE_TOO_LARGE', 'UPSTREAM_INVALID_RESPONSE', 'UPSTREAM_TIMEOUT', 'UPSTREAM_UNAVAILABLE', 'UNSUPPORTED_AUDIO', 'AUDIO_NOT_AVAILABLE', 'AUDIO_EXPIRED', 'AUDIO_CACHE_FAILED', 'AUDIO_TOO_LARGE', 'EMPTY_AUDIO', 'EMPTY_TRANSCRIPT', 'TRANSCRIPT_TOO_LONG', 'INVALID_REPORT_OUTPUT', 'INVALID_AUDIO_PATH', 'UPLOAD_REQUIRED', 'UPLOAD_SIZE_MISMATCH', 'UPLOAD_DOWNLOAD_FAILED', 'TELEGRAM_NOT_CONFIGURED', 'TELEGRAM_INVALID_FILE', 'TELEGRAM_INVALID_RESPONSE', 'DRAFT_CONFLICT', 'STORAGE_UNAVAILABLE', 'FORBIDDEN']);
+const providerName = config => ({ 'https://api.groq.com/openai/v1': 'Groq', 'https://api.openai.com/v1': 'OpenAI', 'https://api.avalai.ir/v1': 'AvalAI' })[config?.aiBaseUrl] || null;
 const now = () => new Date().toISOString();
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new DomainError(message, status, code); };
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' } });
@@ -20,7 +23,11 @@ const audioView = row => {
   const sourceExists = row.source === 'telegram' ? Boolean(row.file_id || row.storage_path) : row.source === 'upload' && Boolean(row.storage_path);
   return { available: Boolean(sourceExists && Number.isFinite(deadline) && deadline > Date.now()), expiresAt: Number.isFinite(deadline) && row.source !== 'text' ? new Date(deadline).toISOString() : null, mimeType: sourceExists ? metadata.mime_type || (row.source === 'telegram' ? 'audio/ogg' : null) : null };
 };
-const draftView = row => ({ id: row.id, userId: row.user_id, source: row.source, status: row.status, transcript: row.transcript || '', fields: parseObject(row.fields), error: row.error || null, audio: audioView(row), reportId: row.report_id || null, createdAt: row.created_at });
+const processingView = row => {
+  const value = parseObject(parseObject(row.source_metadata).processing);
+  return { stage: PROCESSING_STAGES.has(value.stage) ? value.stage : null, code: PROCESSING_CODES.has(value.code) ? value.code : null, provider: ['Groq', 'OpenAI', 'AvalAI'].includes(value.provider) ? value.provider : null };
+};
+const draftView = row => ({ id: row.id, userId: row.user_id, source: row.source, status: row.status, transcript: row.transcript || '', fields: parseObject(row.fields), error: row.error || null, audio: audioView(row), processing: processingView(row), reportId: row.report_id || null, createdAt: row.created_at });
 
 async function bytesFromStream(stream, limit) {
   if (!stream) return new Uint8Array();
@@ -152,7 +159,7 @@ async function cacheTelegramAudio({ repo, supabase, row, config, fetcher, claim 
   audioStoragePath({ ...row, storage_path: path });
   const { error } = await supabase.storage.from(BUCKET).upload(path, new Blob([audio.bytes], { type: audio.mimeType }), { contentType: audio.mimeType, cacheControl: '300', upsert: false });
   // Concurrent readers may have cached this same immutable Telegram file first.
-  if (error && !['409', 'Duplicate', 'ResourceAlreadyExists'].includes(String(error.statusCode || error.code))) fail('ذخیرهٔ خصوصی صوت انجام نشد؛ دوباره تلاش کنید.', 503, 'AUDIO_CACHE_FAILED');
+  if (error && String(error.statusCode) !== '409' && !['Duplicate', 'ResourceAlreadyExists', 'KeyAlreadyExists'].includes(error.code)) fail('ذخیرهٔ خصوصی صوت انجام نشد؛ دوباره تلاش کنید.', 503, 'AUDIO_CACHE_FAILED');
   const updated = await repo.updateDraft(row.id, { storage_path: path, source_metadata: { ...metadata, expected_size: audio.bytes.byteLength, mime_type: audio.mimeType, file_name: audio.fileName, audio_cached_at: now() } }, claim === undefined ? {} : { claim });
   if (!updated) fail('اطلاعات ویس هم‌زمان تغییر کرد؛ دوباره تلاش کنید.', 409, 'DRAFT_CONFLICT');
   await audioInfo(supabase, updated);
@@ -191,8 +198,20 @@ export async function processDraft({ repo, supabase, id, fetcher = fetch, env = 
     }
     return fetcher(url, { ...options, signal: controller.signal });
   };
+  let stage = 'settings', provider = null;
+  const attemptedAt = now();
+  // Persist the exact boundary without storing provider bodies, keys or audio contents.
+  // Reload metadata so a simultaneous playback cache cannot be overwritten by a checkpoint.
+  const checkpoint = async (nextStage, patch = {}) => {
+    stage = nextStage;
+    const current = await repo.getDraft(id);
+    const updated = await repo.updateDraft(id, { ...patch, source_metadata: { ...parseObject(current?.source_metadata), processing: { stage, provider, attempted_at: attemptedAt, code: null } } }, { claim });
+    if (!updated) fail('اطلاعات ویس هم‌زمان تغییر کرد؛ دوباره تلاش کنید.', 409, 'DRAFT_CONFLICT');
+    row = updated;
+  };
   try {
     const config = await getConfig(repo, env);
+    provider = providerName(config);
     if (!config.aiApiKey || !config.aiModel) fail('اتصال اختصاصی هوش مصنوعی آریوس را در تنظیمات گزارش صوتی کامل کنید.', 503, 'AI_NOT_CONFIGURED');
     const { state } = await repo.loadState();
     const user = state.users.find(user => user.id === row.user_id);
@@ -201,27 +220,31 @@ export async function processDraft({ repo, supabase, id, fetcher = fetch, env = 
     const projects = snapshot.projects.filter(project => user.role === 'manager' || project.memberIds.includes(user.id)).map(({ id, name }) => ({ id, name }));
     let transcript = row.transcript || '';
     if (!transcript) {
+      await checkpoint('audio');
       let audio;
       if (row.source === 'telegram') {
         const cached = await cacheTelegramAudio({ repo, supabase, row, config, fetcher: boundedFetcher, claim });
         row = cached.row; audio = cached.audio;
       } else { retainedAudio(row); audio = await storedAudio(supabase, row); }
+      await checkpoint('transcription');
       transcript = await transcribeAudio({ ...audio, config, fetcher: boundedFetcher });
-      const stored = await repo.updateDraft(id, { transcript }, { claim });
-      if (!stored) return draftView(await repo.getDraft(id));
-      row = stored;
+      await checkpoint('report', { transcript });
       // Keep the private original for playback until the seven-day retention deadline.
       // Retried extraction still uses the durable transcript rather than transcribing again.
     }
+    if (stage !== 'report') await checkpoint('report');
     const previous = parseObject(row.fields);
     const scopedProjects = previous.projectId ? projects.filter(project => project.id === previous.projectId) : projects;
     if (previous.projectId && !scopedProjects.length) fail('پروژه انتخابی دیگر در دسترس فرستنده ویس نیست.', 403, 'FORBIDDEN');
     const fields = await extractReport({ transcript, projects: scopedProjects, referenceDate: tehranDate(), config, fetcher: boundedFetcher });
     if (previous.projectId && scopedProjects.length) fields.projectId = previous.projectId;
-    await repo.updateDraft(id, { status: 'ready', fields, error: null, claim: null, claim_until: 0 }, { claim });
+    await checkpoint('complete', { status: 'ready', fields, error: null, claim: null, claim_until: 0 });
   } catch (error) {
-    const safeMessage = Number.isInteger(error?.status) && error?.code ? error.message : 'پردازش صوت انجام نشد؛ اتصال سرویس را بررسی و دوباره تلاش کنید.';
-    await repo.updateDraft(id, { status: 'failed', error: safeMessage, claim: null, claim_until: 0 }, { claim });
+    const code = PROCESSING_CODES.has(error?.code) ? error.code : null;
+    const safeMessage = Number.isInteger(error?.status) && code ? error.message : 'پردازش صوت انجام نشد؛ اتصال سرویس را بررسی و دوباره تلاش کنید.';
+    console.warn(JSON.stringify({ event: 'arios_voice_failure', stage, code: code || 'PROCESSING_FAILED', provider }));
+    const current = await repo.getDraft(id);
+    await repo.updateDraft(id, { status: 'failed', error: safeMessage, claim: null, claim_until: 0, source_metadata: { ...parseObject(current?.source_metadata), processing: { stage, code, provider, attempted_at: attemptedAt } } }, { claim });
   } finally { clearTimeout(budgetTimer); budget.abort(); for (const remove of listeners) remove(); }
   const saved = await repo.getDraft(id);
   return saved ? draftView(saved) : null;

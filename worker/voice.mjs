@@ -228,6 +228,37 @@ function audioInfo(mimeType, fileName) {
   return { mimeType: type && AUDIO_TYPES.has(type) ? type : ({ ogg: 'audio/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'video/mp4', wav: 'audio/wav', webm: 'audio/webm', flac: 'audio/flac' })[extension], fileName: `arios-voice.${extension}` };
 }
 
+// Telegram's file endpoint can return a generic or nonstandard Content-Type and
+// a generated filename without a useful extension. Infer only known audio
+// containers from the downloaded binary, never from a MIME alias or filename.
+function telegramAudioInfo(bytes, mimeType, fileName) {
+  const at = (offset, value) => offset >= 0 && offset + value.length <= bytes.length && Array.from(value).every((char, index) => bytes[offset + index] === char.charCodeAt(0));
+  let detected;
+  if (bytes.length >= 28 && at(0, 'OggS') && bytes[4] === 0) {
+    const segments = bytes[26], packet = 27 + segments;
+    if (segments && packet < bytes.length && (at(packet, 'OpusHead') || at(packet, '\x01vorbis') || at(packet, '\x7fFLAC'))) detected = 'audio/ogg';
+  } else if (bytes.length >= 42 && at(0, 'fLaC') && (bytes[4] & 0x7f) === 0 && bytes[5] === 0 && bytes[6] === 0 && bytes[7] === 34) detected = 'audio/flac';
+  else if (bytes.length >= 44 && at(0, 'RIFF') && at(8, 'WAVE')) detected = 'audio/wav';
+  else if (bytes.length >= 16 && at(4, 'ftyp')) {
+    const boxSize = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
+    const audioBrands = ['M4A ', 'M4B ', 'isom', 'iso2', 'mp41', 'mp42', 'qt  '];
+    if (boxSize >= 16 && boxSize <= bytes.length && audioBrands.some(brand => at(8, brand))) detected = 'audio/mp4';
+  } else if (bytes.length >= 12 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) {
+    // Require the EBML DocType element, not merely the common Matroska header.
+    const end = Math.min(bytes.length - 6, 4096);
+    for (let offset = 4; offset <= end; offset++) if (bytes[offset] === 0x42 && bytes[offset + 1] === 0x82 && bytes[offset + 2] === 0x84 && at(offset + 3, 'webm')) { detected = 'audio/webm'; break; }
+  }
+  if (!detected) {
+    let frame = 0;
+    if (bytes.length >= 10 && at(0, 'ID3') && [2, 3, 4].includes(bytes[3]) && bytes.slice(6, 10).every(value => value < 128)) {
+      frame = 10 + ((bytes[6] << 21) | (bytes[7] << 14) | (bytes[8] << 7) | bytes[9]) + (bytes[3] === 4 && (bytes[5] & 0x10) ? 10 : 0);
+    }
+    // MPEG audio frame sync, valid version/layer/bitrate/sample-rate fields.
+    if (frame + 4 <= bytes.length && bytes[frame] === 0xff && (bytes[frame + 1] & 0xe0) === 0xe0 && (bytes[frame + 1] & 0x18) !== 0x08 && (bytes[frame + 1] & 0x06) !== 0 && (bytes[frame + 2] & 0xf0) !== 0 && (bytes[frame + 2] & 0xf0) !== 0xf0 && (bytes[frame + 2] & 0x0c) !== 0x0c) detected = 'audio/mpeg';
+  }
+  return audioInfo(detected || mimeType, detected ? undefined : fileName);
+}
+
 export async function transcribeAudio({ bytes, mimeType, fileName, config, fetcher = fetch }) {
   if (!(bytes instanceof Uint8Array) || !bytes.byteLength) fail('فایل صوتی خالی یا نامعتبر است.');
   if (bytes.byteLength > MAX_AUDIO_BYTES) fail('حداکثر حجم ویس ۲۰ مگابایت است.', 413, 'AUDIO_TOO_LARGE');
@@ -368,6 +399,6 @@ export async function downloadTelegramVoice({ token, fileId, fileSize, fetcher =
   if (file.file_size !== undefined && (!Number.isSafeInteger(file.file_size) || file.file_size < 1 || file.file_size > MAX_AUDIO_BYTES)) fail('حداکثر حجم ویس تلگرام ۲۰ مگابایت است.', 413, 'AUDIO_TOO_LARGE');
   const downloaded = await request(`https://api.telegram.org/file/bot${token}/${file.file_path}`, { method: 'GET' }, { fetcher, maxBytes: MAX_AUDIO_BYTES, timeoutMs: 60000, binary: true, service: 'telegram' });
   if (!downloaded.bytes.byteLength) fail('فایل ویس دریافتی خالی است.', 422, 'EMPTY_AUDIO');
-  const audio = audioInfo(downloaded.mimeType, file.file_path);
+  const audio = telegramAudioInfo(downloaded.bytes, downloaded.mimeType, file.file_path);
   return { bytes: downloaded.bytes, ...audio };
 }

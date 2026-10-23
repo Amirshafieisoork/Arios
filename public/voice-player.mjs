@@ -12,10 +12,18 @@ export function renderVoiceAudio(draft, { escape, date }) {
 }
 
 export function validateVoiceAudio(value, now = Date.now()) {
+  const expiresAt = Date.parse(value?.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) throw new Error('INVALID_AUDIO_URL');
+  // Browser playback stays on the authenticated application origin. A draft ID is
+  // the only path input; queries, fragments and encoded paths are never accepted.
+  if (typeof value?.url === 'string' && /^\/api\/voice\/audio\/file\/[A-Za-z0-9_-]{1,120}$/.test(value.url)) {
+    return { url: value.url, expiresAt, fileName: typeof value.fileName === 'string' ? value.fileName : 'ARIOS-voice.ogg' };
+  }
+  // Keep in-flight responses from the previous deployment playable while the
+  // server rolls over to the same-origin media endpoint.
   let url;
   try { url = new URL(value?.url); } catch { throw new Error('INVALID_AUDIO_URL'); }
-  const expiresAt = Date.parse(value.expiresAt);
-  if (url.origin !== 'https://qategfabulrkvdckzmqp.supabase.co' || url.username || url.password || !url.pathname.startsWith('/storage/v1/object/sign/arios-audio/') || !url.searchParams.get('token') || !Number.isFinite(expiresAt) || expiresAt <= now) throw new Error('INVALID_AUDIO_URL');
+  if (url.origin !== 'https://qategfabulrkvdckzmqp.supabase.co' || url.username || url.password || !url.pathname.startsWith('/storage/v1/object/sign/arios-audio/') || !url.searchParams.get('token')) throw new Error('INVALID_AUDIO_URL');
   return { url: url.href, expiresAt, fileName: typeof value.fileName === 'string' ? value.fileName : 'ARIOS-voice.ogg' };
 }
 

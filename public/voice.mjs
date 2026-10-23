@@ -8,9 +8,43 @@ const list = value => Array.isArray(value) ? value : [];
 const statusLabels = {pending:'در صف پردازش',processing:'در حال تبدیل',ready:'آمادهٔ بررسی',failed:'نیازمند پیگیری',submitted:'گزارش ثبت شد'};
 const sourceLabels = {telegram:'تلگرام',upload:'فایل صوتی',text:'متن'};
 const field = (title,content,full=false) => `<label class="field ${full?'full':''}"><span class="field-label">${title}</span>${content}</label>`;
-function memory(userId){if(!views.has(userId))views.set(userId,{loaded:false,loading:false,data:null,error:'',query:'',filter:'all',syncing:false,text:'',projectId:'',pendingRender:false,testing:false,diagnostics:null});return views.get(userId);}
+function memory(userId){if(!views.has(userId))views.set(userId,{loaded:false,loading:false,data:null,error:'',query:'',filter:'all',syncing:false,text:'',projectId:'',pendingRender:false,testing:false,diagnostics:null,processingIds:new Set(),retrying:false,retryProgress:''});return views.get(userId);}
 const current = userId => document.querySelector('[data-voice-user]')?.dataset.voiceUser===userId;
 const isManager = state => state.user.role==='manager';
+export function retryableTelegramDrafts(drafts,now=Date.now()){
+ const seen=new Set();
+ return list(drafts).filter(d=>{
+  if(d?.source!=='telegram'||!['failed','pending'].includes(d.status)||typeof d.id!=='string'||!d.id||seen.has(d.id)||d.audio?.available!==true)return false;
+  if(d.audio.expiresAt&&!(Date.parse(d.audio.expiresAt)>now))return false;
+  seen.add(d.id);return true;
+ });
+}
+export function voiceRetryMessage(draft){
+ if(draft?.status==='ready')return 'تبدیل انجام شد؛ متن ویس و پیش‌نویس گزارش آمادهٔ بررسی است';
+ if(draft?.status==='failed')return draft.error||'پردازش کامل نشد؛ جزئیات را در پیش‌نویس ببینید و دوباره تلاش کنید';
+ if(draft?.status==='processing')return 'این ویس در حال پردازش است؛ نتیجه با تازه‌سازی نمایش داده می‌شود';
+ if(draft?.status==='pending')return 'ویس در صف پردازش است؛ نتیجه هنوز آماده نشده است';
+ if(draft?.status==='submitted')return 'گزارش این ویس قبلاً ثبت شده است';
+ return 'نتیجهٔ پردازش دریافت نشد؛ وضعیت پیش‌نویس را تازه کنید';
+}
+/** One explicit action retries a finite snapshot sequentially, never a polling loop. */
+export async function retryTelegramDrafts({drafts,retry,onResult=()=>{},isActive=()=>true,limit=10,now=Date.now()}){
+ const eligible=retryableTelegramDrafts(drafts,now),queue=eligible.slice(0,Math.max(0,Math.min(10,Math.floor(limit)||0)));
+ const summary={attempted:0,ready:0,failed:0,pending:0,remaining:eligible.length,stopped:false};
+ for(const draft of queue){
+  if(!isActive()){summary.stopped=true;break;}
+  let result,error;
+  try{result=await retry(draft.id);}
+  catch(cause){error=cause;}
+  summary.attempted++;summary.remaining--;
+  if(result?.status==='ready')summary.ready++;
+  else if(error||result?.status==='failed')summary.failed++;
+  else summary.pending++;
+  await onResult({draft,result,error,summary:{...summary}});
+  if(error&&[401,403,429].includes(error.status)||['AI_QUOTA_EXCEEDED','AI_AUTH_FAILED','AI_NOT_CONFIGURED','AI_CONFIG_INVALID','AI_REGION_UNSUPPORTED','UPSTREAM_RATE_LIMITED'].includes(result?.processing?.code)){summary.stopped=true;break;}
+ }
+ return summary;
+}
 const AI_SERVICES = Object.freeze({
  'https://api.avalai.ir/v1':Object.freeze({label:'AvalAI',aiModel:'gpt-4o-mini',transcriptionModel:'whisper-1'}),
  'https://api.openai.com/v1':Object.freeze({label:'OpenAI',aiModel:'gpt-4o-mini',transcriptionModel:'whisper-1'}),
@@ -72,7 +106,7 @@ function integrations(state,ctx,data){
 }
 function drafts(state,ctx,m){
  const all=list(m.data?.drafts), rows=all.filter(d=>(m.filter==='all'||d.status===m.filter)&&(!m.query||[d.transcript,d.fields?.description,d.fields?.output,ctx.projectName(d.fields?.projectId)].join(' ').includes(m.query)));
- return `<section class="card voice-drafts"><div class="card-head"><div><h2 class="card-title">صندوق پیش‌نویس‌ها</h2><p class="muted">متن اصلی را با گزارش مقایسه کنید، سپس برای بررسی مدیر بفرستید.</p></div><span class="badge gray">${ctx.e(ctx.n(all.length))} مورد</span></div><div class="voice-filters"><label class="searchbox">${ctx.icon('search')}<input data-voice-search aria-label="جست‌وجو در پیش‌نویس‌ها" placeholder="جست‌وجو در متن و گزارش…" value="${ctx.e(m.query)}"></label><label class="field"><span class="sr-only">وضعیت پیش‌نویس</span><select data-voice-filter><option value="all">همهٔ وضعیت‌ها</option>${Object.entries(statusLabels).map(([k,v])=>`<option value="${k}" ${m.filter===k?'selected':''}>${v}</option>`).join('')}</select></label></div><div class="voice-draft-list">${rows.length?rows.map(d=>`<article class="voice-draft"><div class="row between"><div class="voice-draft-origin"><span class="voice-source-icon">${ctx.icon(d.source==='telegram'?'send':d.source==='upload'?'reports':'assistant')}</span><div><strong>${ctx.e(sourceLabels[d.source]||'گزارش')}</strong><small>${ctx.e(ctx.date(d.createdAt))}${isManager(state)?' · '+ctx.e(ctx.personName(d.userId)):''}</small></div></div>${statusBadge(d.status)}</div><h3>${ctx.e(d.fields?.projectId?ctx.projectName(d.fields.projectId):'پروژه هنوز مشخص نشده')}</h3><p class="voice-excerpt">${ctx.e((d.fields?.description||d.transcript||'منتظر دریافت متن صوت…').slice(0,240))}</p>${d.error?`<p class="voice-error" role="status">${ctx.e(d.error)}</p>`:''}${renderVoiceAudio(d,{escape:ctx.e,date:ctx.date})}${list(d.fields?.warnings).length?`<div class="voice-missing">${ctx.icon('bell')} ${ctx.e(ctx.n(d.fields.warnings.length))} نکته برای بررسی</div>`:''}<div class="row between voice-draft-foot"><small>${d.fields?.date?ctx.e(ctx.date(d.fields.date)):'تاریخ نیازمند بررسی'}${d.fields?.start&&d.fields?.end?' · '+ctx.e(d.fields.start)+' تا '+ctx.e(d.fields.end):''}</small><div class="actions">${d.transcript?`<button class="button secondary small" data-voice-download="${ctx.e(d.id)}" aria-label="دریافت متن پیش‌نویس">${ctx.icon('download')}</button>`:''}${d.status==='ready'?`<button class="button primary small" data-voice-review="${ctx.e(d.id)}">بررسی و ثبت ${ctx.icon('arrow')}</button>`:d.status==='failed'?`<button class="button secondary small" data-voice-retry="${ctx.e(d.id)}">تلاش دوباره</button>`:d.status==='submitted'?'<a class="button secondary small" href="#reports">گزارش‌های کار</a>':'<span class="muted">در حال آماده‌سازی…</span>'}</div></div>${d.transcript?`<details class="voice-transcript"><summary>متن اصلی ${d.source==='text'?'گزارش':'ویس'}</summary><p class="pre-wrap">${ctx.e(d.transcript)}</p></details>`:''}</article>`).join(''):`<div class="voice-empty">${ctx.icon('reports')}<h3>${all.length?'پیش‌نویسی با این مشخصات پیدا نشد':'اولین گزارش را با صدای خودتان بسازید'}</h3><p>${all.length?'فیلتر یا عبارت جست‌وجو را تغییر دهید.':'فایل ویس را بارگذاری کنید، متن بنویسید یا حسابتان را به بات تلگرام وصل کنید.'}</p></div>`}</div></section>`;
+ return `<section class="card voice-drafts"><div class="card-head"><div><h2 class="card-title">صندوق پیش‌نویس‌ها</h2><p class="muted">متن اصلی را با گزارش مقایسه کنید، سپس برای بررسی مدیر بفرستید.</p></div><div class="actions"><span class="badge gray">${ctx.e(ctx.n(all.length))} مورد</span>${isManager(state)?`<button class="button secondary small" data-voice-retry-all ${m.retrying||m.processingIds.size||m.syncing||!m.data?.integration?.aiConfigured||ctx.api.isStatic||!retryableTelegramDrafts(all).length?'disabled':''}>${m.retrying?'در حال پردازش ویس‌ها…':'پردازش ویس‌های باقی‌مانده'}</button>`:''}</div></div>${isManager(state)?`<p class="muted" data-voice-retry-progress role="status" aria-live="polite">${ctx.e(m.retryProgress)}</p>`:''}<div class="voice-filters"><label class="searchbox">${ctx.icon('search')}<input data-voice-search aria-label="جست‌وجو در پیش‌نویس‌ها" placeholder="جست‌وجو در متن و گزارش…" value="${ctx.e(m.query)}"></label><label class="field"><span class="sr-only">وضعیت پیش‌نویس</span><select data-voice-filter><option value="all">همهٔ وضعیت‌ها</option>${Object.entries(statusLabels).map(([k,v])=>`<option value="${k}" ${m.filter===k?'selected':''}>${v}</option>`).join('')}</select></label></div><div class="voice-draft-list">${rows.length?rows.map(d=>`<article class="voice-draft"><div class="row between"><div class="voice-draft-origin"><span class="voice-source-icon">${ctx.icon(d.source==='telegram'?'send':d.source==='upload'?'reports':'assistant')}</span><div><strong>${ctx.e(sourceLabels[d.source]||'گزارش')}</strong><small>${ctx.e(ctx.date(d.createdAt))}${isManager(state)?' · '+ctx.e(ctx.personName(d.userId)):''}</small></div></div>${statusBadge(m.processingIds.has(d.id)?'processing':d.status)}</div><h3>${ctx.e(d.fields?.projectId?ctx.projectName(d.fields.projectId):'پروژه هنوز مشخص نشده')}</h3><p class="voice-excerpt">${ctx.e((d.fields?.description||d.transcript||'منتظر دریافت متن صوت…').slice(0,240))}</p>${d.error?`<p class="voice-error" role="status">${ctx.e(d.error)}</p>`:''}${renderVoiceAudio(d,{escape:ctx.e,date:ctx.date})}${list(d.fields?.warnings).length?`<div class="voice-missing">${ctx.icon('bell')} ${ctx.e(ctx.n(d.fields.warnings.length))} نکته برای بررسی</div>`:''}<div class="row between voice-draft-foot"><small>${d.fields?.date?ctx.e(ctx.date(d.fields.date)):'تاریخ نیازمند بررسی'}${d.fields?.start&&d.fields?.end?' · '+ctx.e(d.fields.start)+' تا '+ctx.e(d.fields.end):''}</small><div class="actions">${d.transcript?`<button class="button secondary small" data-voice-download="${ctx.e(d.id)}" aria-label="دریافت متن پیش‌نویس">${ctx.icon('download')}</button>`:''}${d.status==='ready'?`<button class="button primary small" data-voice-review="${ctx.e(d.id)}">بررسی و ثبت ${ctx.icon('arrow')}</button>`:['failed','pending'].includes(d.status)?`<button class="button secondary small" data-voice-retry="${ctx.e(d.id)}" ${m.processingIds.has(d.id)||m.retrying?'disabled':''}>${m.processingIds.has(d.id)?'در حال پردازش…':d.status==='pending'?'پردازش ویس':'تلاش دوباره'}</button>`:d.status==='submitted'?'<a class="button secondary small" href="#reports">گزارش‌های کار</a>':'<span class="muted">در حال آماده‌سازی…</span>'}</div></div>${d.transcript?`<details class="voice-transcript"><summary>متن اصلی ${d.source==='text'?'گزارش':'ویس'}</summary><p class="pre-wrap">${ctx.e(d.transcript)}</p></details>`:''}</article>`).join(''):`<div class="voice-empty">${ctx.icon('reports')}<h3>${all.length?'پیش‌نویسی با این مشخصات پیدا نشد':'اولین گزارش را با صدای خودتان بسازید'}</h3><p>${all.length?'فیلتر یا عبارت جست‌وجو را تغییر دهید.':'فایل ویس را بارگذاری کنید، متن بنویسید یا حسابتان را به بات تلگرام وصل کنید.'}</p></div>`}</div></section>`;
 }
 export function renderVoice(state,ctx){
  if(!['manager','worker'].includes(state.user.role))return '<section class="card"><p>گزارش‌های صوتی برای تیم اجرایی و مدیر در دسترس است.</p></section>';
@@ -111,12 +145,57 @@ function download(draft,state,ctx){
  const text=voiceDraftText(draft,ctx);
  const url=URL.createObjectURL(new Blob(['\uFEFF'+text],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=`ARIOS-report-${String(draft.id).replace(/[^a-zA-Z0-9_-]/g,'').slice(0,80)}.txt`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+function rememberResult(m,result){
+ if(!result?.id||!m.data)return;
+ const index=list(m.data.drafts).findIndex(d=>d.id===result.id);
+ if(index>=0)m.data.drafts[index]=result;
+}
+function updateRetryControls(state,ctx){
+ if(!current(state.user.id))return;
+ const m=memory(state.user.id),busy=m.retrying||m.processingIds.size>0;
+ for(const button of document.querySelectorAll('[data-voice-retry]')){
+  const processing=m.processingIds.has(button.dataset.voiceRetry),draft=list(m.data?.drafts).find(d=>d.id===button.dataset.voiceRetry);
+  button.disabled=busy||m.syncing;
+  button.textContent=processing?'در حال پردازش…':draft?.status==='pending'?'پردازش ویس':'تلاش دوباره';
+ }
+ const all=document.querySelector('[data-voice-retry-all]');
+ if(all){all.disabled=busy||m.syncing||ctx.api.isStatic||!m.data?.integration?.aiConfigured||!retryableTelegramDrafts(m.data?.drafts).length;all.textContent=m.retrying?'در حال پردازش ویس‌ها…':'پردازش ویس‌های باقی‌مانده';}
+ const progress=document.querySelector('[data-voice-retry-progress]');if(progress)progress.textContent=m.retryProgress;
+ const syncButton=document.querySelector('[data-telegram-sync]');if(syncButton)syncButton.disabled=busy||m.syncing||!m.data?.telegram?.configured||ctx.api.isStatic;
+}
+async function retryDraft(id,state,ctx){
+ const m=memory(state.user.id);if(!id||m.retrying||m.processingIds.size||m.syncing)return;
+ m.processingIds.add(id);updateRetryControls(state,ctx);
+ try{
+  const result=await ctx.api.voiceRetry(id);rememberResult(m,result);
+  if(current(state.user.id))ctx.toast(voiceRetryMessage(result));
+ }catch(error){if(current(state.user.id))ctx.toast(error.message||'پردازش انجام نشد؛ دوباره تلاش کنید');}
+ finally{m.processingIds.delete(id);await reload(state,ctx);updateRetryControls(state,ctx);}
+}
+async function retryRemaining(state,ctx){
+ const m=memory(state.user.id);if(!isManager(state)||m.retrying||m.processingIds.size||m.syncing||ctx.api.isStatic||!m.data?.integration?.aiConfigured)return;
+ const drafts=retryableTelegramDrafts(m.data?.drafts);if(!drafts.length)return;
+ m.retrying=true;m.retryProgress='ویس‌ها به‌ترتیب پردازش می‌شوند؛ می‌توانید صوت‌ها را بشنوید';updateRetryControls(state,ctx);
+ try{
+  const result=await retryTelegramDrafts({drafts,isActive:()=>current(state.user.id),retry:async id=>{
+   m.processingIds.add(id);updateRetryControls(state,ctx);
+   try{return await ctx.api.voiceRetry(id);}finally{m.processingIds.delete(id);}
+  },onResult:async({result,error,summary})=>{
+   rememberResult(m,result);
+   m.retryProgress=`${ctx.n(summary.attempted)} ویس بررسی شد؛ ${ctx.n(summary.ready)} پیش‌نویس آماده و ${ctx.n(summary.failed)} مورد نیازمند پیگیری${error?' · '+(error.message||'ارتباط کامل نشد'):''}`;
+   updateRetryControls(state,ctx);
+  }});
+  m.retryProgress=`${ctx.n(result.ready)} پیش‌نویس آمادهٔ بررسی؛ ${ctx.n(result.failed)} مورد ناموفق${result.pending?'؛ '+ctx.n(result.pending)+' مورد هنوز در صف یا در حال پردازش':''}${result.remaining?'؛ '+ctx.n(result.remaining)+' ویس بررسی‌نشده باقی مانده است':''}`;
+  if(current(state.user.id))ctx.toast(m.retryProgress);
+ }finally{m.retrying=false;m.processingIds.clear();await reload(state,ctx);updateRetryControls(state,ctx);}
+}
 async function sync(state,ctx,automatic=false){
- if(!isManager(state))return;const m=memory(state.user.id);if(m.syncing||!m.data?.telegram?.configured)return;m.syncing=true;
+ if(!isManager(state))return;const m=memory(state.user.id);if(m.syncing||m.retrying||m.processingIds.size||!m.data?.telegram?.configured)return;m.syncing=true;
  const button=document.querySelector('[data-telegram-sync]');if(button){button.disabled=true;button.textContent='در حال دریافت…';}
+ updateRetryControls(state,ctx);
  try{const result=await ctx.api.telegramSync();m.lastSync=new Intl.DateTimeFormat('fa-IR',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Tehran'}).format(new Date());if(!automatic||result.received||result.failed)ctx.toast(result.warning||`${ctx.n(result.received||0)} پیام دریافت شد؛ ${ctx.n(result.processed||0)} مورد پردازش شد.${result.failed?' '+ctx.n(result.failed)+' مورد نیازمند پیگیری است.':''}`);await reload(state,ctx);}
  catch(error){if(!automatic&&current(state.user.id))ctx.toast(error.message||'دریافت از تلگرام انجام نشد.');}
- finally{m.syncing=false;if(current(state.user.id)){const b=document.querySelector('[data-telegram-sync]');if(b){b.disabled=false;b.innerHTML=ctx.icon('clock')+'همگام‌سازی تلگرام';}}}
+ finally{m.syncing=false;if(current(state.user.id)){const b=document.querySelector('[data-telegram-sync]');if(b){b.disabled=false;b.innerHTML=ctx.icon('clock')+'همگام‌سازی تلگرام';}updateRetryControls(state,ctx);}}
 }
 export function stopVoice(){clearInterval(poll);poll=undefined;audioCleanup?.();audioCleanup=undefined;}
 export function wireVoice(state,ctx){
@@ -141,6 +220,7 @@ export function wireVoice(state,ctx){
  listen('[data-voice-review]',el=>{const d=list(m.data?.drafts).find(d=>d.id===el.dataset.voiceReview);if(d)reviewModal(d,state,ctx);});
  listen('[data-voice-download]',el=>{const d=list(m.data?.drafts).find(d=>d.id===el.dataset.voiceDownload);if(d)download(d,state,ctx);});
  listen('[data-voice-reupload]',()=>{const input=document.querySelector('#voice-file');input?.scrollIntoView({behavior:'smooth',block:'center'});input?.focus();ctx.toast('فایل صوتی را دوباره انتخاب و بارگذاری کنید.');});
- listen('[data-voice-retry]',el=>{void withButton(el,ctx,async()=>{await ctx.api.voiceRetry(el.dataset.voiceRetry);await reload(state,ctx);});});
- if(!ctx.api.isStatic)poll=setInterval(()=>{const file=document.querySelector('#voice-file')?.files?.[0];if(!current(state.user.id)||document.visibilityState!=='visible'||document.querySelector('#modal-form')||file||m.text||m.testing||audioPlaybackActive(document))return;if(isManager(state)&&m.data?.telegram?.configured)void sync(state,ctx,true);else void reload(state,ctx);},30000);
+ listen('[data-voice-retry]',el=>{void retryDraft(el.dataset.voiceRetry,state,ctx);});
+ listen('[data-voice-retry-all]',()=>{void retryRemaining(state,ctx);});
+ if(!ctx.api.isStatic)poll=setInterval(()=>{const file=document.querySelector('#voice-file')?.files?.[0];if(!current(state.user.id)||document.visibilityState!=='visible'||document.querySelector('#modal-form')||file||m.text||m.testing||m.retrying||m.processingIds.size||audioPlaybackActive(document))return;if(isManager(state)&&m.data?.telegram?.configured)void sync(state,ctx,true);else void reload(state,ctx);},30000);
 }

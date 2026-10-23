@@ -5,6 +5,7 @@ import { api } from '../public/api.mjs';
 import { renderVoice, wireVoice, stopVoice, voiceDraftText } from '../public/voice.mjs';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const playback = id => ({ url: `/api/voice/audio/file/${id}`, expiresAt: new Date(Date.now() + 300000).toISOString(), fileName: 'voice.ogg', mimeType: 'audio/ogg' });
 const signed = suffix => ({ url: `https://qategfabulrkvdckzmqp.supabase.co/storage/v1/object/sign/arios-audio/worker/draft/audio.ogg?token=fictitious-${suffix}`, expiresAt: new Date(Date.now() + 300000).toISOString(), fileName: 'voice.ogg', mimeType: 'audio/ogg' });
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 function setGlobal(t, name, value) {
@@ -54,7 +55,22 @@ test('original Telegram/upload audio is playable in failed, ready and submitted 
   assert.match(renderVoiceAudio({ source: 'upload', audio: { available: false, expiresAt: '2000-01-01T00:00:00Z' } }, { escape, date: String }), /مهلت نگه‌داری/);
 });
 
-test('only fresh HTTPS signed audio from the private audio bucket is accepted', () => {
+test('fresh same-origin audio paths accept only a safe draft ID and no browser credentials or query', () => {
+  assert.equal(validateVoiceAudio(playback('telegram_19991865')).url, '/api/voice/audio/file/telegram_19991865');
+  for (const url of [
+    '/api/voice/audio/file/', '/api/voice/audio/file/' + 'a'.repeat(121),
+    '/api/voice/audio/file/../private', '/api/voice/audio/file/a/b',
+    '/api/voice/audio/file/%2e%2e', '/api/voice/audio/file/a%2fb',
+    '/api/voice/audio/file/a?token=secret', '/api/voice/audio/file/a#fragment',
+    '//untrusted.example/api/voice/audio/file/a',
+    'https://untrusted.example/api/voice/audio/file/a',
+    'https://user:password@arios-rouge.vercel.app/api/voice/audio/file/a',
+    ' /api/voice/audio/file/a', '/api/voice/audio/file/a\n',
+  ]) assert.throws(() => validateVoiceAudio({ ...playback('a'), url }), /INVALID_AUDIO_URL/);
+  for (const expiresAt of ['2000-01-01T00:00:00Z', 'invalid']) assert.throws(() => validateVoiceAudio({ ...playback('a'), expiresAt }), /INVALID_AUDIO_URL/);
+});
+
+test('fresh HTTPS signed private storage audio remains supported during deployment rollover', () => {
   assert.equal(validateVoiceAudio(signed('valid')).fileName, 'voice.ogg');
   for (const change of [
     { url: 'javascript:alert(1)' }, { url: signed('insecure').url.replace('https:', 'http:') },
@@ -82,22 +98,22 @@ test('requesting playback uses the authenticated application API and sends only 
     assert.equal(options.credentials, 'same-origin');
     assert.equal(options.method, 'POST');
     assert.deepEqual(JSON.parse(options.body), { id: 'draft-one' });
-    return new Response(JSON.stringify(signed('api')), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify(playback('draft-one')), { headers: { 'Content-Type': 'application/json' } });
   };
-  assert.equal((await api.voiceAudio('draft-one')).fileName, 'voice.ogg');
+  assert.equal((await api.voiceAudio('draft-one')).url, '/api/voice/audio/file/draft-one');
 });
 
 test('audio loading and playing are active states, one player sounds at a time, and stop resets time', async () => {
   const { root, elements: [first, second] } = fixture(['first', 'second']);
   let resolveFirst;
   const calls = [];
-  const dispose = wireVoiceAudio(root, { getAudio: id => { calls.push(id); return id === 'first' ? new Promise(resolve => { resolveFirst = resolve; }) : Promise.resolve(signed('second')); } });
+  const dispose = wireVoiceAudio(root, { getAudio: id => { calls.push(id); return id === 'first' ? new Promise(resolve => { resolveFirst = resolve; }) : Promise.resolve(playback('second')); } });
   first.button.dispatchEvent(new Event('click'));
   first.button.dispatchEvent(new Event('click'));
   assert.deepEqual(calls, ['first']);
   assert.equal(audioPlaybackActive(root), true);
   assert.equal(first.button.disabled, true);
-  resolveFirst(signed('first'));
+  resolveFirst(playback('first'));
   await tick();
   assert.equal(first.player.paused, false);
   assert.equal(first.download.hidden, false);
@@ -114,10 +130,10 @@ test('audio loading and playing are active states, one player sounds at a time, 
   dispose();
 });
 
-test('a failed/expired media URL can be renewed without persisting it, and resumes the listening position', async () => {
+test('a failed/expired media response can be renewed without persisting it, and resumes the listening position', async () => {
   const { root, elements: [view] } = fixture();
   let count = 0;
-  const dispose = wireVoiceAudio(root, { getAudio: async () => signed(++count) });
+  const dispose = wireVoiceAudio(root, { getAudio: async () => { count += 1; return playback('draft-one'); } });
   view.button.dispatchEvent(new Event('click'));
   await tick();
   view.player.currentTime = 24;
@@ -129,7 +145,7 @@ test('a failed/expired media URL can be renewed without persisting it, and resum
   view.button.dispatchEvent(new Event('click'));
   await tick();
   assert.equal(count, 2);
-  assert.match(view.player.src, /fictitious-2/);
+  assert.equal(view.player.src, '/api/voice/audio/file/draft-one');
   assert.equal(view.player.currentTime, 24);
   dispose();
   assert.equal(view.player.getAttribute('src'), null);
@@ -141,11 +157,11 @@ test('a failed/expired media URL can be renewed without persisting it, and resum
 test('browser autoplay restrictions keep native controls ready, while private API failures never reveal raw details', async () => {
   const first = fixture();
   first.elements[0].player.playError = Object.assign(new Error('Blocked'), { name: 'NotAllowedError' });
-  const dispose = wireVoiceAudio(first.root, { getAudio: async () => signed('manual') });
+  const dispose = wireVoiceAudio(first.root, { getAudio: async () => playback('manual') });
   first.elements[0].button.dispatchEvent(new Event('click'));
   await tick();
   assert.match(first.elements[0].status.textContent, /دکمهٔ پخش داخل نوار/);
-  assert.match(first.elements[0].player.src, /fictitious-manual/);
+  assert.equal(first.elements[0].player.src, '/api/voice/audio/file/manual');
   dispose();
   const second = fixture();
   const disposeFailed = wireVoiceAudio(second.root, { getAudio: async () => { throw Object.assign(new Error('raw-private-upstream-details'), { status: 410, code: 'AUDIO_EXPIRED' }); } });
@@ -155,6 +171,26 @@ test('browser autoplay restrictions keep native controls ready, while private AP
   assert(!second.elements[0].status.textContent.includes('raw-private'));
   assert.equal(second.elements[0].player.src, null);
   disposeFailed();
+});
+
+test('same-origin playback preserves authentication, permission and unavailable-file errors safely', async () => {
+  for (const [status, code, message] of [
+    [401, 'UNAUTHORIZED', /دوباره وارد حساب/],
+    [403, 'FORBIDDEN', /اجازهٔ شنیدن/],
+    [404, 'AUDIO_NOT_AVAILABLE', /در دسترس نیست/],
+    [410, 'AUDIO_EXPIRED', /مهلت نگه‌داری/],
+  ]) {
+    const { root, elements: [view] } = fixture();
+    const dispose = wireVoiceAudio(root, { getAudio: async () => { throw Object.assign(new Error('private-storage-or-auth-detail'), { status, code }); } });
+    view.button.dispatchEvent(new Event('click'));
+    await tick();
+    assert.match(view.status.textContent, message);
+    assert(!view.status.textContent.includes('private-storage-or-auth-detail'));
+    assert.equal(view.player.src, null);
+    assert.equal(view.download.hidden, true);
+    assert.equal(view.button.disabled, false);
+    dispose();
+  }
 });
 
 test('navigating away while a signed URL is loading never attaches it to a detached player', async () => {
