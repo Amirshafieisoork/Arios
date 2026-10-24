@@ -26,7 +26,7 @@ function fixture() {
   const client = { auth: { getUser: async () => { calls.auth++; return { data: { user: null }, error: { status: 401 } }; } } };
   const handle = createHandler({ repo, client, fetcher: () => { calls.provider++; assert.fail('An unconfigured or unauthorized request cannot call a provider'); } });
   const request = (path, payload) => new Request('https://edge.example/functions/v1/arios-api' + path, payload === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  return { handle, request, calls };
+  return { handle, request, calls, repo };
 }
 
 test('Edge public projects route is anonymous but exposes only the explicit publication view', async () => {
@@ -97,8 +97,36 @@ function accountFixture(role = 'manager', { legacy = false } = {}) {
     headers: { ...(authenticated ? { Authorization: 'Bearer verified-test-session' } : {}), ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
   });
-  return { handle, request, calls, settings, state };
+  return { handle, request, calls, settings, state, repo };
 }
+
+test('Edge callback receipt requires explicit consent and a successful private write without authentication or AI', async () => {
+  const f = fixture(), row = { id: '11111111-2222-4333-8444-555555555555', status: 'new', created_at: '2026-10-24T12:00:00Z' };
+  f.repo.findLeadRequest = async () => null;
+  f.repo.createLead = async input => ({ created: true, lead: { ...row, request_hash: input.requestHash } });
+  const payload = { phone: '09123456789', requestId: '01234567-89ab-4cde-8f01-234567890abc', consent: true };
+  const saved = await f.handle(f.request('/public-leads', payload));
+  assert.equal(saved.status, 201); assert.equal((await saved.json()).accepted, true);
+  assert.equal(f.calls.auth, 0); assert.equal(f.calls.provider, 0); assert.equal(f.calls.state, 0);
+  const noConsent = await f.handle(f.request('/public-leads', { ...payload, consent: false }));
+  assert.equal(noConsent.status, 400); assert.equal((await noConsent.json()).code, 'CONSENT_REQUIRED');
+  f.repo.createLead = async () => { throw Error('write failed'); };
+  const failed = await f.handle(f.request('/public-leads', payload));
+  assert.equal(failed.status, 500); const body = await failed.json(); assert.equal(body.accepted, undefined); assert(!JSON.stringify(body).includes('write failed'));
+});
+
+test('Edge callback inbox and status update routes enforce manager access before repository calls', async () => {
+  const f = accountFixture();
+  const lead = { id: '11111111-2222-4333-8444-555555555555', name: '', phone: '+989123456789', message: '', status: 'new', created_at: '2026-10-24T12:00:00Z', updated_at: '2026-10-24T12:00:00Z' };
+  f.repo.listLeads = async () => [lead];
+  f.repo.updateLeadStatus = async (id, status) => ({ ...lead, status });
+  const allowed = await f.handle(f.request('/leads')); assert.equal(allowed.status, 200); assert.equal((await allowed.json()).leads[0].phone, lead.phone);
+  const changed = await f.handle(f.request('/leads/' + lead.id + '/status', { status: 'closed' })); assert.equal(changed.status, 200); assert.equal((await changed.json()).lead.status, 'closed');
+  const worker = accountFixture('worker'); worker.repo.listLeads = () => assert.fail('Only managers may read callback records');
+  assert.equal((await worker.handle(worker.request('/leads'))).status, 403);
+  assert.equal((await worker.handle(worker.request('/leads/' + lead.id + '/status', { status: 'closed' }))).status, 403);
+  assert.equal((await f.handle(f.request('/leads', undefined, false))).status, 401);
+});
 
 test('Edge recovery requests are anonymous and return the same acknowledgement for known and unknown phones', async () => {
   const f = accountFixture(), replies = [];

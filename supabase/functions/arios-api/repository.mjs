@@ -10,6 +10,7 @@ const boundedLimit = (limit, max = 100) => Math.max(1, Math.min(max, Number.isSa
 const draftColumns = 'id,user_id,source,status,transcript,fields,source_metadata,storage_path,error,report_id,file_id,created_at,updated_at,claim,claim_until';
 const linkColumns = 'telegram_user_id,user_id,chat_id,created_at';
 const profileColumns = 'auth_user_id,domain_user_id,role,created_at';
+const leadColumns = 'id,request_id,request_hash,name,phone,message,status,created_at,updated_at';
 function databaseFailure(error) {
   if (error?.code === '23505') return new RepositoryError('این حساب یا رکورد قبلاً ثبت یا متصل شده است.', 409, 'DUPLICATE_RECORD');
   if (error?.code === '23503') return new RepositoryError('حساب مرتبط یافت نشد.', 409, 'RELATED_ACCOUNT_MISSING');
@@ -65,6 +66,17 @@ export function createRepository(client) {
   const commitAccount = ({ expectedRevision, state, authUserId, domainUserId, role }) => rpc('arios_account_commit', { p_expected_revision: expectedRevision, p_state: state, p_auth_user_id: authUserId, p_domain_user_id: domainUserId, p_role: role });
   const authSessionValid = (authUserId, sessionId, validAfter) => rpc('arios_auth_session_valid', { p_auth_user_id: authUserId, p_session_id: sessionId, p_valid_after: validAfter });
   const updateAccount = ({ expectedRevision, state, authUserId, domainUserId, role }) => rpc('arios_account_update', { p_expected_revision: expectedRevision, p_state: state, p_auth_user_id: authUserId, p_domain_user_id: domainUserId, p_role: role });
+
+  const findLeadRequest = requestId => result(client.from('arios_leads').select(leadColumns).eq('request_id', requestId).maybeSingle());
+  const createLead = async ({ requestId, requestHash, name, phone, message }) => {
+    // The unique request key makes concurrent retries one insert; do not overwrite
+    // contact details or a manager's status when an older browser retries.
+    const rows = await result(client.from('arios_leads').upsert({ request_id: requestId, request_hash: requestHash, name, phone, message }, { onConflict: 'request_id', ignoreDuplicates: true }).select(leadColumns));
+    const created = Boolean(rows?.length), lead = created ? rows[0] : await findLeadRequest(requestId);
+    return { created, lead };
+  };
+  const listLeads = () => result(client.from('arios_leads').select(leadColumns).order('created_at', { ascending: false }).limit(100));
+  const updateLeadStatus = (id, status) => result(client.from('arios_leads').update({ status, updated_at: now() }).eq('id', id).select(leadColumns).maybeSingle());
 
   const listDrafts = (userId = null, limit = 100) => {
     let query = client.from('arios_drafts').select(draftColumns).order('created_at', { ascending: false }).limit(boundedLimit(limit));
@@ -129,6 +141,7 @@ export function createRepository(client) {
   return {
     loadState, initState, mutateState, getSetting, setSetting, deleteSetting,
     getProfile, getProfileByDomainId, listProfileLinks, createProfile, bootstrap, commitAccount, updateAccount, authSessionValid,
+    findLeadRequest, createLead, listLeads, updateLeadStatus,
     listDrafts, getDraft, createDraft, updateDraft, claimDraft, pendingTelegramDrafts, expiredUploadDrafts, completedUploadDrafts, expiredAudioDrafts,
     listTelegramLinks, getTelegramLink, createLinkCode, consumeLinkCode, unlinkTelegram,
     ingestUpdates, listPendingUpdates, setUpdateStatus, hasTelegramHistory,

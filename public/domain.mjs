@@ -97,7 +97,7 @@ function safeUser(user, includeRates = false) {
   return result;
 }
 function safeReport(report, includeRates) {
-  const result = pick(report, ['id', 'projectId', 'workerId', 'date', 'start', 'end', 'breakMinutes', 'description', 'output', 'status', 'minutes', 'createdAt', 'version', 'reviewNote', 'reviewedBy']);
+  const result = pick(report, ['id', 'projectId', 'workerId', 'date', 'start', 'end', 'breakMinutes', 'description', 'output', 'status', 'minutes', 'createdAt', 'version', 'reviewNote', 'reviewedBy', 'location', 'photoIds']);
   if (includeRates) Object.assign(result, pick(report, ['rate', 'laborCost']));
   return result;
 }
@@ -138,7 +138,7 @@ export function publicState(state, userId) {
   const result = {
     user: safeUser(user, finance),
     users: state.users.filter(person => finance || contactIds.has(person.id)).map(person => {
-      if (person.id === user.id || isManager) return safeUser(person, finance);
+      if (person.id === user.id || isManager) return {...safeUser(person, finance),...(isManager?pick(person,['availability','workStart','workEnd']):{})};
       if (isWarehouse) return pick(person, ['id', 'name', 'role', 'deletedAt']);
       if (isAccountant) return pick(person, ['id', 'name', 'role', 'hourlyRate', 'rateHistory', 'deletedAt']);
       return safeUser(person);
@@ -146,6 +146,10 @@ export function publicState(state, userId) {
     projects: projects.map(project => {
       if (isWarehouse) return pick(project, ['id', 'name', 'type', 'status']);
       const item = pick(project, isAccountant ? ['id', 'name', 'type', 'customerId', 'memberIds', 'status', 'progress', 'startDate', 'endDate', 'cover'] : ['id', 'name', 'type', 'customerId', 'memberIds', 'contactIds', 'location', 'status', 'progress', 'startDate', 'endDate', 'description', 'phases', 'cover', 'clientNote']);
+      if (!isAccountant) {
+        if (isManager || isWorker) item.tasks = (project.tasks || []).map(task => pick(task, ['id', 'title', 'assigneeId', 'dueDate', 'status', 'version', 'createdAt', 'updatedAt']));
+        item.files = (project.files || []).filter(file => file.status === 'ready' && (!file.draftId || file.reportId || file.uploadedBy === user.id) && (user.role !== 'customer' || file.clientVisible === true)).map(file => pick(file, ['id', 'name', 'mimeType', 'size', 'uploadedBy', 'createdAt', 'clientVisible', 'reportId']));
+      }
       if (finance) {
         Object.assign(item, pick(project, ['budget', 'contractAmount']));
         if (isManager) Object.assign(item, pick(project, ['publicVisible', 'publicTitle', 'publicSummary']));
@@ -162,6 +166,7 @@ export function publicState(state, userId) {
     stockCatalog: isWorker ? state.inventory.map(item => pick(item, ['id', 'name', 'unit', 'quantity'])) : [],
     receipts: isWorker || isWarehouse ? [] : scoped(state.receipts).map(receipt => pick(receipt, ['id', 'invoiceId', 'projectId', 'amount', 'reference', 'method', 'recordedBy', 'createdAt'])),
     audit: isManager ? state.audit.map(entry => pick(entry, ['id', 'actorId', 'action', 'entityId', 'createdAt', 'description'])) : [],
+    reportDrafts: (isManager || isWorker) ? (state.reportDrafts || []).filter(entry => entry.authorId === user.id && !entry.reportId && projectIds.has(entry.projectId)).map(entry => pick(entry, ['id', 'projectId', 'workerId', 'date', 'start', 'end', 'breakMinutes', 'description', 'output', 'location', 'photoIds', 'version', 'updatedAt'])) : [],
   };
   return result;
 }
@@ -178,6 +183,21 @@ function roundedLabor(rate, minutes) {
   const result = (numerator + 30n) / 60n;
   if (result > BigInt(Number.MAX_SAFE_INTEGER)) fail('هزینه دستمزد از محدوده مجاز بیشتر است.');
   return Number(result);
+}
+
+function reportLocation(value) {
+  if (value === undefined || value === null) return null;
+  if (!record(value) || typeof value.latitude !== 'number' || !Number.isFinite(value.latitude) || Math.abs(value.latitude) > 90 || typeof value.longitude !== 'number' || !Number.isFinite(value.longitude) || Math.abs(value.longitude) > 180 || typeof value.accuracy !== 'number' || !Number.isFinite(value.accuracy) || value.accuracy < 0 || value.accuracy > 100000 || typeof value.capturedAt !== 'string' || !Number.isFinite(Date.parse(value.capturedAt))) fail('موقعیت ثبت‌شده معتبر نیست.');
+  return { latitude: value.latitude, longitude: value.longitude, accuracy: value.accuracy, capturedAt: new Date(value.capturedAt).toISOString() };
+}
+function reportPhotos(project, value, user, draftId) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 6 || value.some(item => typeof item !== 'string')) fail('تصاویر گزارش معتبر نیستند.');
+  return [...new Set(value)].map(fileId => {
+    const file = (project.files || []).find(file => file.id === fileId && file.status === 'ready' && ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimeType));
+    if (!file || (file.draftId && file.draftId !== draftId && !file.reportId) || (user.role !== 'manager' && file.uploadedBy !== user.id)) fail('تصویر انتخابی در دسترس این گزارش نیست.', 403, 'FORBIDDEN');
+    return fileId;
+  });
 }
 
 /** Validate and commit atomically. Any thrown error leaves the caller's state untouched. */
@@ -223,6 +243,62 @@ export function applyAction(state, userId, action, payload = {}) {
     if (payload.publicTitle !== undefined) project.publicTitle = text(payload.publicTitle, 'عنوان عمومی', { optional: true, max: 160 });
     if (payload.publicSummary !== undefined) project.publicSummary = text(payload.publicSummary, 'شرح عمومی', { optional: true, max: 1000 });
     result = project; audit(draft, user, action, project, 'اطلاعات پروژه به‌روزرسانی شد.');
+  } else if (action === 'task.create' || action === 'task.update') {
+    roleAllowed(user, ['manager', 'worker']);
+    const project = requireProject(draft, user, payload.projectId);
+    project.tasks ||= [];
+    if (action === 'task.create') {
+      manager(user);
+      if (project.tasks.length >= 300) fail('حداکثر ۳۰۰ وظیفه برای این پروژه قابل ثبت است.');
+      const assigneeId = payload.assigneeId || null;
+      if (assigneeId && (!project.memberIds.includes(assigneeId) || !draft.users.some(person=>person.id===assigneeId&&person.role==='worker'&&!person.deletedAt))) fail('مسئول وظیفه باید نیروی فعال همین پروژه باشد.');
+      const dueDate = payload.dueDate ? isoDate(payload.dueDate, 'مهلت وظیفه') : null;
+      result = { id: id('task'), title: text(payload.title, 'عنوان وظیفه', {max: 240}), assigneeId, dueDate, status: 'open', version: 1, createdAt: now(), updatedAt: now() };
+      project.tasks.push(result);
+    } else {
+      const task = find(project.tasks, payload.id, 'وظیفه');
+      if (payload.version !== task.version) fail('وظیفه تغییر کرده است؛ صفحه را تازه کنید.', 409, 'VERSION_CONFLICT');
+      if (user.role !== 'manager' && task.assigneeId !== user.id) fail('فقط وضعیت وظیفهٔ خود را تغییر دهید.', 403, 'FORBIDDEN');
+      if (user.role !== 'manager' && ['title', 'assigneeId', 'dueDate'].some(key => payload[key] !== undefined)) fail('ویرایش برنامهٔ وظیفه برای مدیر مجاز است.', 403, 'FORBIDDEN');
+      if (payload.title !== undefined) task.title = text(payload.title, 'عنوان وظیفه', {max: 240});
+      if (payload.assigneeId !== undefined) { if (payload.assigneeId && (!project.memberIds.includes(payload.assigneeId)||!draft.users.some(person=>person.id===payload.assigneeId&&person.role==='worker'&&!person.deletedAt))) fail('مسئول وظیفه باید نیروی فعال همین پروژه باشد.'); task.assigneeId = payload.assigneeId || null; }
+      if (payload.dueDate !== undefined) task.dueDate = payload.dueDate ? isoDate(payload.dueDate, 'مهلت وظیفه') : null;
+      if (payload.status !== undefined) task.status = choice(payload.status, ['open', 'in_progress', 'done'], 'وضعیت وظیفه');
+      task.version += 1; task.updatedAt = now(); result = task;
+    }
+    audit(draft, user, action, result, action === 'task.create' ? 'وظیفهٔ پروژه ثبت شد.' : 'وظیفهٔ پروژه به‌روزرسانی شد.');
+  } else if (action === 'report.draft.save' || action === 'report.draft.delete') {
+    roleAllowed(user, ['manager', 'worker']);
+    draft.reportDrafts ||= [];
+    let entry = payload.id ? find(draft.reportDrafts, payload.id, 'پیش‌نویس') : null;
+    if (entry && entry.authorId !== user.id) fail('پیش‌نویس فقط برای نویسنده در دسترس است.', 403, 'FORBIDDEN');
+    if (entry?.reportId) fail('این پیش‌نویس قبلاً ارسال شده است.', 409, 'DRAFT_SUBMITTED');
+    if (entry && entry.version !== payload.version) fail('پیش‌نویس تغییر کرده است؛ صفحه را تازه کنید.', 409, 'VERSION_CONFLICT');
+    if (action === 'report.draft.delete') {
+      if (!entry) fail('پیش‌نویس یافت نشد.', 404, 'NOT_FOUND');
+      for(const project of draft.projects)for(const file of project.files||[])if(file.draftId===entry.id&&!file.reportId)file.status='removed';
+      draft.reportDrafts = draft.reportDrafts.filter(row => row.id !== entry.id); result = {id: entry.id};
+    } else {
+      const project = requireProject(draft, user, payload.projectId);
+      const workerId = user.role === 'worker' ? user.id : payload.workerId;
+      if (workerId && !project.memberIds.includes(workerId)) fail('نیرو باید عضو همین پروژه باشد.');
+      if (!entry && draft.reportDrafts.filter(row => row.authorId === user.id && !row.reportId).length >= 30) fail('حداکثر ۳۰ پیش‌نویس فعال نگه دارید.');
+      const fields = {projectId:project.id,workerId:workerId || null,date:payload.date ? isoDate(payload.date) : '',start:payload.start ? (clock(payload.start), payload.start) : '',end:payload.end ? (clock(payload.end), payload.end) : '',breakMinutes:integer(payload.breakMinutes ?? 0,'استراحت',0,1439),description:text(payload.description,'شرح کار',{optional:true}),output:text(payload.output,'خروجی کار',{optional:true}),location:reportLocation(payload.location)};
+      entry ||= {id:id('rd'),authorId:user.id,version:0,createdAt:now()};
+      fields.photoIds=reportPhotos(project,payload.photoIds,user,entry.id);
+      Object.assign(entry,fields,{version:entry.version+1,updatedAt:now()});
+      if (!draft.reportDrafts.some(row=>row.id===entry.id)) draft.reportDrafts.push(entry);
+      result=pick(entry,['id','projectId','workerId','date','start','end','breakMinutes','description','output','location','photoIds','version','updatedAt']);
+    }
+  } else if (action === 'team.schedule') {
+    manager(user);
+    const person=find(draft.users,payload.id,'نیرو');
+    if(person.deletedAt||person.role!=='worker')fail('برنامه فقط برای نیروی فعال اجرایی ثبت می‌شود.');
+    const availability=choice(payload.availability,['available','busy','leave'],'وضعیت حضور');
+    const workStart=payload.workStart||'',workEnd=payload.workEnd||'';
+    if(Boolean(workStart)!==Boolean(workEnd))fail('شروع و پایان ساعت کاری را با هم وارد کنید.');
+    if(workStart&&clock(workEnd)<=clock(workStart))fail('پایان ساعت کاری باید پس از شروع باشد.');
+    Object.assign(person,{availability,workStart,workEnd});result={id:person.id,availability,workStart,workEnd};audit(draft,user,action,result,'وضعیت حضور و برنامهٔ کاری نیرو ثبت شد.');
   } else if (action === 'account.update') {
     manager(user);
     const person = find(draft.users, text(payload.id, 'شناسه حساب', { max: 120 }), 'حساب');
@@ -293,9 +369,14 @@ export function applyAction(state, userId, action, payload = {}) {
     audit(draft, user, action, person, action === 'account.archive' ? 'حساب از کاربران فعال حذف شد؛ سوابق حفظ شد.' : 'دسترسی حساب بازیابی شد.');
   } else if (action === 'report.create') {
     if (!['worker', 'manager'].includes(user.role)) fail('ثبت گزارش برای این حساب مجاز نیست.', 403, 'FORBIDDEN');
+    const sourceDraft = payload.draftId ? find(draft.reportDrafts || [], payload.draftId, 'پیش‌نویس') : null;
+    if (sourceDraft && sourceDraft.authorId !== user.id) fail('پیش‌نویس در دسترس نیست.',403,'FORBIDDEN');
+    if (sourceDraft) requireProject(draft,user,sourceDraft.projectId);
+    if (sourceDraft?.reportId) return safeReport(find(draft.reports,sourceDraft.reportId,'گزارش'),user.role==='manager');
     const project = requireProject(draft, user, payload.projectId);
     if (user.role === 'worker' && payload.workerId !== undefined && payload.workerId !== user.id) fail('گزارش را فقط برای خود ثبت کنید.', 403, 'FORBIDDEN');
     const workerId = user.role === 'worker' ? user.id : payload.workerId;
+    if (sourceDraft && (sourceDraft.projectId!==project.id || sourceDraft.workerId!==workerId)) fail('پروژه و نیروی پیش‌نویس باید با گزارش یکسان باشند.');
     const worker = find(draft.users, workerId, 'نیروی اجرایی');
     if (worker.deletedAt || worker.role !== 'worker' || !project.memberIds.includes(worker.id)) fail('نیروی انتخابی عضو این پروژه نیست.', 403, 'FORBIDDEN');
     const date = isoDate(payload.date);
@@ -304,6 +385,9 @@ export function applyAction(state, userId, action, payload = {}) {
     const breakMinutes = integer(payload.breakMinutes ?? 0, 'دقیقه استراحت', 0, end - start - 1);
     const minutes = end - start - breakMinutes;
     result = { id: id('r'), projectId: project.id, workerId, date, start: payload.start, end: payload.end, breakMinutes, description: text(payload.description, 'شرح کار'), output: text(payload.output, 'خروجی کار', { optional: true }), status: 'submitted', minutes, createdAt: now(), version: 1, rate: historicalRate(worker, date), laborCost: 0 };
+    result.location=reportLocation(payload.location);
+    result.photoIds=reportPhotos(project,payload.photoIds,user,sourceDraft?.id);
+    if (sourceDraft) {sourceDraft.reportId=result.id;sourceDraft.completedAt=now();for(const file of project.files||[])if(result.photoIds.includes(file.id))file.reportId=result.id;}
     draft.reports.push(result); audit(draft, user, action, result, 'گزارش برای بررسی ثبت شد.');
     result = safeReport(result, user.role === 'manager');
   } else if (action === 'report.update') {
@@ -325,7 +409,10 @@ export function applyAction(state, userId, action, payload = {}) {
     const description = text(payload.description, 'شرح کار');
     const output = text(payload.output, 'خروجی کار', { optional: true });
     const rate = date === report.date ? report.rate : historicalRate(worker, date);
-    Object.assign(report, { projectId: project.id, date, start: payload.start, end: payload.end, breakMinutes, description, output, minutes: end - start - breakMinutes, rate, laborCost: 0, status: 'submitted', version: report.version + 1 });
+    const moved=report.projectId!==project.id;
+    const location=payload.location!==undefined?reportLocation(payload.location):(moved?null:report.location??null);
+    const photoIds=payload.photoIds!==undefined?reportPhotos(project,payload.photoIds,user,undefined):(moved?[]:report.photoIds||[]);
+    Object.assign(report, { projectId: project.id, date, start: payload.start, end: payload.end, breakMinutes, description, output, minutes: end - start - breakMinutes, rate, laborCost: 0, status: 'submitted', version: report.version + 1, location, photoIds });
     delete report.reviewNote;
     delete report.reviewedBy;
     audit(draft, user, action, report, 'گزارش اصلاح و دوباره برای بررسی ارسال شد.');

@@ -6,6 +6,8 @@ import { APIError, authenticate, bootstrap, createAccount, activateAccount, pass
 import { testAIConnection } from './voice-core.mjs';
 import { publicAssistant, publicProjects, workspaceAssistant } from './assistant-service.mjs';
 import { workspaceState } from './account-state.mjs';
+import { createPublicLead, listLeads, updateLeadStatus } from './lead-service.mjs';
+import { handleProjectFiles } from './project-files.mjs';
 
 const fail = (message: string, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
@@ -87,6 +89,11 @@ export function createHandler(options: any = {}) {
       }
       if (path === '/api/bootstrap' && request.method === 'POST') return json(await bootstrap(client, repo, await readJSON(request)), 201);
       if (path === '/api/public-projects' && request.method === 'GET') return json(await publicProjects({ repo }));
+      if (path === '/api/public-leads' && request.method === 'POST') {
+        const result = await createPublicLead({ repo, payload: await readJSON(request, 8192) });
+        const { created, ...body } = result;
+        return json(body, created ? 201 : 200);
+      }
       if (path === '/api/public-assistant' && request.method === 'POST') return json(await publicAssistant({ repo, payload: await readJSON(request, 24576), config: await getConfig(repo), fetcher }));
       if (path === '/api/password-login' && request.method === 'POST') return json(await passwordLogin({
         client, repo, payload: await readJSON(request, 4096), authUrl: readEnv('SUPABASE_URL'),
@@ -95,6 +102,11 @@ export function createHandler(options: any = {}) {
       if (path === '/api/password-reset/request' && request.method === 'POST') return json(await requestPasswordReset(repo, await readJSON(request, 4096)));
       const { user, state } = await authenticate(request, client, repo);
       await rate(repo, `request:${user.id}`, 120);
+      const projectFiles = await handleProjectFiles({ repo, supabase: client, user, request, path, readJSON, json });
+      if (projectFiles) return projectFiles;
+      if (path === '/api/leads' && request.method === 'GET') return json(await listLeads({ repo, user }));
+      const leadStatus = path.match(/^\/api\/leads\/([^/]+)\/status$/);
+      if (leadStatus && request.method === 'POST') return json(await updateLeadStatus({ repo, user, id: leadStatus[1], payload: await readJSON(request, 1024) }));
       if (path === '/api/password-reset/requests' && request.method === 'GET') return json(await listPasswordResetRequests(repo, user));
       if (path === '/api/session' && request.method === 'GET') {
         const config = await getConfig(repo);

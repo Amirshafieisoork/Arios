@@ -69,7 +69,7 @@ test('same-origin POST protection rejects missing, foreign and cross-site origin
     { origin: 'https://foreign.example.com' },
     { origin: APP, extraHeaders: { 'Sec-Fetch-Site': 'cross-site' } },
   ]) {
-    for (const path of ['/api/login', '/api/logout', '/api/actions', '/api/bootstrap', '/api/password-reset/request']) {
+    for (const path of ['/api/login', '/api/logout', '/api/actions', '/api/bootstrap', '/api/password-reset/request', '/api/public-leads']) {
       const denied = await f.call(path, { method: 'POST', body: { email: 'member@example.com', password: PASSWORD }, cookie: 'arios_access=test-existing-access', ...scenario });
       assert.equal(denied.status, 403, path);
       assert.equal(denied.data.code, 'ORIGIN_DENIED');
@@ -77,6 +77,21 @@ test('same-origin POST protection rejects missing, foreign and cross-site origin
     }
   }
   assert.equal(f.calls.length, 0);
+});
+
+test('callback capture forwards an explicit submission without workspace credentials or arbitrary fields', async () => {
+  const input = { phone: '09123456789', name: 'مشتری', message: 'شبکه', requestId: '01234567-89ab-4cde-8f01-234567890abc', consent: true };
+  const f = fixture({ upstream: call => {
+    assert.equal(call.path, '/functions/v1/arios-api/public-leads');
+    assert.equal(call.headers.has('Authorization'), false);
+    const { clientId, ...body } = call.body;
+    assert.match(clientId, /^[a-f0-9]{64}$/); assert.deepEqual(body, input);
+    return json({ accepted: true, lead: { id: 'saved-lead', status: 'new', createdAt: '2026-10-24T12:00:00Z' } }, 201);
+  } });
+  const saved = await f.call('/api/public-leads', { method: 'POST', cookie: 'arios_access=private-session', body: { ...input, clientId: 'forged-visitor', status: 'closed', auth_user_id: 'other' } });
+  assert.equal(saved.status, 201); assert.equal(saved.data.accepted, true);
+  assert(saved.cookies.some(value => value.startsWith('arios_visitor=') && value.includes('HttpOnly')));
+  const denied = fixture(); assert.equal((await denied.call('/api/leads')).status, 401);
 });
 
 test('password login verifies Edge membership before issuing secure HttpOnly session cookies', async () => {
