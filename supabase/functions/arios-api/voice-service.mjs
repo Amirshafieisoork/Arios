@@ -13,7 +13,7 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), { stat
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, label, max = 4000) => { if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) fail(`${label} معتبر نیست.`); return value.trim(); };
 const manager = user => { if (user?.role !== 'manager') fail('این عملیات فقط برای مدیر مجاز است.', 403, 'FORBIDDEN'); };
-const canVoice = user => { if (!user || !['manager', 'worker'].includes(user.role)) fail('دسترسی گزارش صوتی مجاز نیست.', 403, 'FORBIDDEN'); };
+const canVoice = user => { if (!user || user.deletedAt || !['manager', 'worker'].includes(user.role)) fail('دسترسی گزارش صوتی مجاز نیست.', 403, 'FORBIDDEN'); };
 const tehranDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))).map(value => value.toString(16).padStart(2, '0')).join('');
 const parseObject = value => { if (object(value)) return value; try { const parsed = JSON.parse(value || '{}'); return object(parsed) ? parsed : {}; } catch { return {}; } };
@@ -258,6 +258,9 @@ async function consumeUpdate(repo, update) {
   if (match) { await repo.consumeLinkCode({ codeHash: await digest(match[1]), telegramUserId, chatId }); return; }
   const link = await repo.getTelegramLink(telegramUserId);
   if (!link || link.chat_id !== chatId) return;
+  const loaded = await repo.loadState();
+  const linkedUser = loaded?.state?.users.find(user => user.id === link.user_id);
+  if (!linkedUser || linkedUser.deletedAt || !['manager', 'worker'].includes(linkedUser.role)) return;
   const audio = message.voice || message.audio;
   if (!audio || typeof audio.file_id !== 'string') return;
   const existing = await repo.getDraft(`telegram_${update.update_id}`);
@@ -265,6 +268,38 @@ async function consumeUpdate(repo, update) {
   const tooLarge = audio.file_size !== undefined && (!Number.isSafeInteger(audio.file_size) || audio.file_size < 1 || audio.file_size > MAX_AUDIO_BYTES);
   await repo.createDraft({ id: `telegram_${update.update_id}`, userId: link.user_id, source: 'telegram', status: tooLarge ? 'failed' : 'pending', fileId: audio.file_id, sourceMetadata: { telegram_update_id: update.update_id, expected_size: audio.file_size ?? null }, fields: {} });
   if (tooLarge) await repo.updateDraft(`telegram_${update.update_id}`, { error: 'حجم ویس از ۲۰ مگابایت بیشتر است.' });
+}
+
+async function pollTelegram({ repo, config, fetcher, maxPending = 100 }) {
+  const offset = Number(await repo.getSetting('telegram_offset') || 0);
+  const updates = await fetchTelegramUpdates({ token: config.telegramBotToken, offset, fetcher });
+  const ingested = await repo.ingestUpdates(updates);
+  let failed = 0;
+  const limit = Number.isSafeInteger(maxPending) ? Math.min(100, Math.max(1, maxPending)) : 100;
+  for (const item of await repo.listPendingUpdates(limit)) {
+    try {
+      await consumeUpdate(repo, object(item.payload) ? item.payload : JSON.parse(item.payload));
+      await repo.setUpdateStatus(item.update_id, 'processed');
+    } catch (error) {
+      failed++;
+      // A consumed/foreign Telegram identity cannot succeed on retry. Keeping
+      // such updates at the head of the queue would starve later valid members.
+      const permanent = error?.code === 'DUPLICATE_RECORD' && error.status === 409 || error?.code === 'INVALID_DATA' && error.status === 400;
+      await repo.setUpdateStatus(item.update_id, permanent ? 'ignored' : 'pending', permanent ? 'کد یا حساب تلگرام قابل اتصال نیست؛ مدیر اتصال حساب را بررسی کند.' : 'دریافت پیام کامل نشد؛ در همگام‌سازی بعدی دوباره تلاش می‌شود.');
+    }
+  }
+  return { received: ingested.inserted || 0, processed: 0, failed };
+}
+
+/** Scheduler-only reception shares the same lock as manual sync and never invokes AI. */
+export async function receiveTelegramUpdates({ repo, fetcher = fetch, env = {}, maxPending = 100 }) {
+  const lock = crypto.randomUUID();
+  if (!await repo.acquireLock('telegram', lock, 600000)) return { received: 0, processed: 0, failed: 0, busy: true };
+  try {
+    const config = await getConfig(repo, env);
+    if (!config.telegramBotToken) return { received: 0, processed: 0, failed: 0, configured: false };
+    return await pollTelegram({ repo, config, fetcher, maxPending });
+  } finally { await repo.releaseLock('telegram', lock); }
 }
 
 export async function syncTelegram({ repo, supabase, fetcher = fetch, env = {} }) {
@@ -275,16 +310,8 @@ export async function syncTelegram({ repo, supabase, fetcher = fetch, env = {} }
     await cleanupAudio(repo, supabase);
     const config = await getConfig(repo, env);
     if (!config.telegramBotToken) fail('توکن بات تلگرام را وارد کنید.', 503, 'TELEGRAM_NOT_CONFIGURED');
-    const offset = Number(await repo.getSetting('telegram_offset') || 0);
-    const updates = await fetchTelegramUpdates({ token: config.telegramBotToken, offset, fetcher });
-    const ingested = await repo.ingestUpdates(updates);
-    received = ingested.inserted || 0;
-    for (const item of await repo.listPendingUpdates(30)) {
-      try {
-        await consumeUpdate(repo, object(item.payload) ? item.payload : JSON.parse(item.payload));
-        await repo.setUpdateStatus(item.update_id, 'processed');
-      } catch { failed++; await repo.setUpdateStatus(item.update_id, 'pending', 'دریافت پیام کامل نشد؛ در همگام‌سازی بعدی دوباره تلاش می‌شود.'); }
-    }
+    const reception = await pollTelegram({ repo, config, fetcher });
+    received = reception.received; failed = reception.failed;
     if (config.aiApiKey && config.aiModel) for (const item of await repo.pendingTelegramDrafts(1)) {
       const result = await processDraft({ repo, supabase, id: item.id, fetcher, env });
       if (result?.status === 'ready') processed++;
@@ -356,16 +383,17 @@ export async function handleVoice({ path, request, supabase, repo, user, fetcher
     return json({ integration: safeConfig(next), telegram: { configured: Boolean(next.telegramBotToken), botUsername: next.botUsername } });
   }
   if (path === '/api/telegram/link') {
-    await rate(repo, `telegram-link:${user.id}`, 10);
+    await rate(repo, `telegram-link:${user.id}`, user.role === 'manager' ? 60 : 10);
     const config = await getConfig(repo, env);
     if (!config.telegramBotToken) fail('ابتدا بات اختصاصی آریوس را متصل کنید.', 503, 'TELEGRAM_NOT_CONFIGURED');
     const target = payload.userId || user.id;
     if (target !== user.id) manager(user);
     const { state } = await repo.loadState();
     canVoice(state.users.find(user => user.id === target));
-    const code = crypto.randomUUID().replaceAll('-', ''), expiresAt = new Date(Date.now() + 600000).toISOString();
+    await rate(repo, `telegram-link-target:${target}`, 3);
+    const code = crypto.randomUUID().replaceAll('-', ''), expiresAt = Date.now() + 600000;
     await repo.createLinkCode({ codeHash: await digest(code), userId: target, expiresAt });
-    return json({ code, expiresAt, botUsername: config.botUsername });
+    return json({ code, expiresAt: new Date(expiresAt).toISOString(), botUsername: config.botUsername });
   }
   if (path === '/api/telegram/unlink') {
     const target = payload.userId || user.id;

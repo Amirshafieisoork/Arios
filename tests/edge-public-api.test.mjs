@@ -57,6 +57,36 @@ test('Edge private state and integration diagnostics still require an authentica
   }
 });
 
+test('scheduled Telegram dispatch requires its private credential before any user or delivery work', async () => {
+  for (const token of [undefined, 'a'.repeat(64)]) {
+    const f = fixture();
+    const headers = {'Content-Type': 'application/json'};
+    if (token) headers['x-arios-scheduler-token'] = token;
+    const response = await f.handle(new Request('https://edge.example/functions/v1/arios-api/internal/telegram-tick', {method: 'POST', headers, body: '{}'}));
+    assert.equal(response.status, 401);
+    const body = await response.json();
+    assert.equal(body.code, 'SCHEDULER_UNAUTHORIZED');
+    assert(!JSON.stringify(body).includes('a'.repeat(64)));
+    assert.equal(f.calls.auth, 0);
+    assert.equal(f.calls.state, 0);
+    assert.equal(f.calls.provider, 0);
+  }
+  const f = fixture();
+  const response = await f.handle(f.request('/internal/telegram-tick'));
+  assert.equal(response.status, 405);
+  assert.equal(f.calls.auth, 0);
+  assert.equal(f.calls.provider, 0);
+});
+
+test('Telegram reminder configuration and delivery status require a workspace session', async () => {
+  for (const [path, payload] of [['/reminders', undefined], ['/reminders/settings', {enabled: true}]]) {
+    const f = fixture(), response = await f.handle(f.request(path, payload));
+    assert.equal(response.status, 401, path);
+    assert.equal((await response.json()).code, 'UNAUTHORIZED');
+    assert.equal(f.calls.provider, 0);
+  }
+});
+
 test('Edge health reports the released backend version without exposing integrations', async () => {
   const f = fixture(), response = await f.handle(f.request('/health'));
   assert.equal(response.status, 200);

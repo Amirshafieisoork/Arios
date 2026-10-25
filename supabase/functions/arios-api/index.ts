@@ -6,6 +6,7 @@ import { APIError, authenticate, bootstrap, createAccount, activateAccount, pass
 import { testAIConnection } from './voice-core.mjs';
 import { publicAssistant, publicProjects, workspaceAssistant } from './assistant-service.mjs';
 import { workspaceState } from './account-state.mjs';
+import { handleReminders } from './reminder-service.mjs';
 import { createPublicLead, listLeads, updateLeadStatus } from './lead-service.mjs';
 import { handleProjectFiles } from './project-files.mjs';
 
@@ -100,8 +101,13 @@ export function createHandler(options: any = {}) {
         authKey: readEnv('SUPABASE_SERVICE_ROLE_KEY'), fetcher,
       }));
       if (path === '/api/password-reset/request' && request.method === 'POST') return json(await requestPasswordReset(repo, await readJSON(request, 4096)));
+      if (path === '/api/internal/telegram-tick') {
+        return await handleReminders({ repo, request, path, fetcher, readJSON, json, env: options.env || {} });
+      }
       const { user, state } = await authenticate(request, client, repo);
       await rate(repo, `request:${user.id}`, 120);
+      const reminders = await handleReminders({ repo, user, request, path, fetcher, readJSON, json, env: options.env || {} });
+      if (reminders) return reminders;
       const projectFiles = await handleProjectFiles({ repo, supabase: client, user, request, path, readJSON, json });
       if (projectFiles) return projectFiles;
       if (path === '/api/leads' && request.method === 'GET') return json(await listLeads({ repo, user }));

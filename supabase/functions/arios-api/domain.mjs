@@ -76,6 +76,11 @@ function inventoryProject(state, user, projectId) {
   roleAllowed(user, ['manager', 'warehouse', 'worker']);
   return user.role === 'worker' ? requireProject(state, user, projectId) : find(state.projects, projectId, 'پروژه');
 }
+function activeStock(state, stockId) {
+  const stock = find(state.inventory, stockId, 'کالای انبار');
+  if (stock.archivedAt) fail('این کالا از فهرست فعال حذف شده است؛ مسئول انبار باید ابتدا آن را بازگرداند.', 409, 'STOCK_ARCHIVED');
+  return stock;
+}
 function financialProject(state, user, projectId) {
   roleAllowed(user, ['manager', 'accountant']);
   return find(state.projects, projectId, 'پروژه');
@@ -147,7 +152,7 @@ export function publicState(state, userId) {
       if (isWarehouse) return pick(project, ['id', 'name', 'type', 'status']);
       const item = pick(project, isAccountant ? ['id', 'name', 'type', 'customerId', 'memberIds', 'status', 'progress', 'startDate', 'endDate', 'cover'] : ['id', 'name', 'type', 'customerId', 'memberIds', 'contactIds', 'location', 'status', 'progress', 'startDate', 'endDate', 'description', 'phases', 'cover', 'clientNote']);
       if (!isAccountant) {
-        if (isManager || isWorker) item.tasks = (project.tasks || []).map(task => pick(task, ['id', 'title', 'assigneeId', 'dueDate', 'status', 'version', 'createdAt', 'updatedAt']));
+        if (isManager || isWorker) item.tasks = (project.tasks || []).map(task => pick(task, ['id', 'title', 'description', 'assigneeId', 'dueDate', 'status', 'version', 'createdAt', 'updatedAt']));
         item.files = (project.files || []).filter(file => file.status === 'ready' && (!file.draftId || file.reportId || file.uploadedBy === user.id) && (user.role !== 'customer' || file.clientVisible === true)).map(file => pick(file, ['id', 'name', 'mimeType', 'size', 'uploadedBy', 'createdAt', 'clientVisible', 'reportId']));
       }
       if (finance) {
@@ -162,8 +167,9 @@ export function publicState(state, userId) {
     invoices: isWorker || isWarehouse ? [] : scoped(state.invoices).map(invoice => pick(invoice, ['id', 'projectId', 'title', 'amount', 'paid', 'dueDate', 'status'])),
     messages: messages.map(safeMessage),
     tickets: tickets.map(safeTicket),
-    inventory: stockManager || isAccountant ? state.inventory.map(item => pick(item, ['id', 'name', 'unit', 'quantity', 'minQuantity', 'unitPrice'])) : [],
-    stockCatalog: isWorker ? state.inventory.map(item => pick(item, ['id', 'name', 'unit', 'quantity'])) : [],
+    inventory: stockManager || isAccountant ? state.inventory.filter(item => !item.archivedAt).map(item => pick(item, ['id', 'name', 'unit', 'quantity', 'minQuantity', 'unitPrice'])) : [],
+    archivedInventory: stockManager || isAccountant ? state.inventory.filter(item => item.archivedAt).map(item => pick(item, ['id', 'name', 'unit', 'quantity', 'minQuantity', 'unitPrice', 'archivedAt', 'archivedBy'])) : [],
+    stockCatalog: isWorker ? state.inventory.filter(item => !item.archivedAt).map(item => pick(item, ['id', 'name', 'unit', 'quantity'])) : [],
     receipts: isWorker || isWarehouse ? [] : scoped(state.receipts).map(receipt => pick(receipt, ['id', 'invoiceId', 'projectId', 'amount', 'reference', 'method', 'recordedBy', 'createdAt'])),
     audit: isManager ? state.audit.map(entry => pick(entry, ['id', 'actorId', 'action', 'entityId', 'createdAt', 'description'])) : [],
     reportDrafts: (isManager || isWorker) ? (state.reportDrafts || []).filter(entry => entry.authorId === user.id && !entry.reportId && projectIds.has(entry.projectId)).map(entry => pick(entry, ['id', 'projectId', 'workerId', 'date', 'start', 'end', 'breakMinutes', 'description', 'output', 'location', 'photoIds', 'version', 'updatedAt'])) : [],
@@ -253,14 +259,15 @@ export function applyAction(state, userId, action, payload = {}) {
       const assigneeId = payload.assigneeId || null;
       if (assigneeId && (!project.memberIds.includes(assigneeId) || !draft.users.some(person=>person.id===assigneeId&&person.role==='worker'&&!person.deletedAt))) fail('مسئول وظیفه باید نیروی فعال همین پروژه باشد.');
       const dueDate = payload.dueDate ? isoDate(payload.dueDate, 'مهلت وظیفه') : null;
-      result = { id: id('task'), title: text(payload.title, 'عنوان وظیفه', {max: 240}), assigneeId, dueDate, status: 'open', version: 1, createdAt: now(), updatedAt: now() };
+      result = { id: id('task'), title: text(payload.title, 'عنوان وظیفه', {max: 240}), description: text(payload.description, 'شرح مأموریت', {optional: true, max: 2000}), assigneeId, dueDate, status: 'open', version: 1, createdAt: now(), updatedAt: now() };
       project.tasks.push(result);
     } else {
       const task = find(project.tasks, payload.id, 'وظیفه');
       if (payload.version !== task.version) fail('وظیفه تغییر کرده است؛ صفحه را تازه کنید.', 409, 'VERSION_CONFLICT');
       if (user.role !== 'manager' && task.assigneeId !== user.id) fail('فقط وضعیت وظیفهٔ خود را تغییر دهید.', 403, 'FORBIDDEN');
-      if (user.role !== 'manager' && ['title', 'assigneeId', 'dueDate'].some(key => payload[key] !== undefined)) fail('ویرایش برنامهٔ وظیفه برای مدیر مجاز است.', 403, 'FORBIDDEN');
+      if (user.role !== 'manager' && ['title', 'description', 'assigneeId', 'dueDate'].some(key => payload[key] !== undefined)) fail('ویرایش برنامهٔ وظیفه برای مدیر مجاز است.', 403, 'FORBIDDEN');
       if (payload.title !== undefined) task.title = text(payload.title, 'عنوان وظیفه', {max: 240});
+      if (payload.description !== undefined) task.description = text(payload.description, 'شرح مأموریت', {optional: true, max: 2000});
       if (payload.assigneeId !== undefined) { if (payload.assigneeId && (!project.memberIds.includes(payload.assigneeId)||!draft.users.some(person=>person.id===payload.assigneeId&&person.role==='worker'&&!person.deletedAt))) fail('مسئول وظیفه باید نیروی فعال همین پروژه باشد.'); task.assigneeId = payload.assigneeId || null; }
       if (payload.dueDate !== undefined) task.dueDate = payload.dueDate ? isoDate(payload.dueDate, 'مهلت وظیفه') : null;
       if (payload.status !== undefined) task.status = choice(payload.status, ['open', 'in_progress', 'done'], 'وضعیت وظیفه');
@@ -437,7 +444,7 @@ export function applyAction(state, userId, action, payload = {}) {
     result = report; audit(draft, user, action, report, status === 'approved' ? 'گزارش تأیید شد.' : 'گزارش بررسی شد.');
   } else if (action === 'material.consume') {
     const project = inventoryProject(draft, user, payload.projectId);
-    const stock = find(draft.inventory, payload.inventoryId, 'کالای انبار');
+    const stock = activeStock(draft, payload.inventoryId);
     // Inventory identity and price always come from canonical stock, never the browser.
     for (const key of ['name', 'unit', 'unitPrice']) if (payload[key] !== undefined) fail('مشخصات و بهای کالای انبار از اطلاعات ثبت‌شده خوانده می‌شود.');
     if (user.role === 'worker' && payload.clientVisible !== undefined && payload.clientVisible !== false) fail('انتشار هزینه برای مشتری فقط توسط مسئول مجاز است.', 403, 'FORBIDDEN');
@@ -481,7 +488,7 @@ export function applyAction(state, userId, action, payload = {}) {
     const clientVisible = bool(payload.clientVisible);
     let inventoryId;
     if (payload.inventoryId) {
-      const stock = find(draft.inventory, payload.inventoryId, 'کالای انبار');
+      const stock = activeStock(draft, payload.inventoryId);
       if (stock.unit !== unit) fail('واحد مصرف با واحد انبار یکسان نیست.');
       if (Math.round(stock.quantity * 1000) < Math.round(amount * 1000)) fail('موجودی انبار کافی نیست.', 409, 'INSUFFICIENT_STOCK');
       stock.quantity = (Math.round(stock.quantity * 1000) - Math.round(amount * 1000)) / 1000;
@@ -545,11 +552,37 @@ export function applyAction(state, userId, action, payload = {}) {
     result = { id: id('inv'), name: text(payload.name, 'نام کالا', { max: 160 }), unit: text(payload.unit, 'واحد', { max: 40 }), quantity: quantity(payload.quantity, 'موجودی اولیه', true), minQuantity: quantity(payload.minQuantity, 'حداقل موجودی', true), unitPrice: integer(payload.unitPrice, 'قیمت واحد') };
     draft.inventory.push(result); audit(draft, user, action, result, 'کالای جدید به انبار افزوده شد.');
   } else if (action === 'inventory.receive') {
-    roleAllowed(user, ['manager', 'warehouse']); const stock = find(draft.inventory, payload.id, 'کالای انبار');
+    roleAllowed(user, ['manager', 'warehouse']); const stock = activeStock(draft, payload.id);
     const received = quantity(payload.quantity);
     const sum = Math.round(stock.quantity * 1000) + Math.round(received * 1000);
     if (!Number.isSafeInteger(sum)) fail('موجودی از محدوده مجاز بیشتر است.');
     stock.quantity = sum / 1000; result = stock; audit(draft, user, action, stock, 'ورود کالا به انبار ثبت شد.');
+  } else if (action === 'inventory.delete') {
+    roleAllowed(user, ['manager', 'warehouse']);
+    const stock = find(draft.inventory, payload.id, 'کالای انبار');
+    if (payload.confirmed !== true) fail('حذف کالا از فهرست فعال باید تأیید شود.', 400, 'CONFIRMATION_REQUIRED');
+    const expected = quantity(payload.expectedQuantity, 'موجودی نمایش‌داده‌شده', true);
+    if (Math.round(expected * 1000) !== Math.round(stock.quantity * 1000)) fail('موجودی این کالا تغییر کرده است؛ مقدار تازه را بررسی و دوباره تأیید کنید.', 409, 'STOCK_CHANGED');
+    const referenced = draft.materials.some(material => material.inventoryId === stock.id);
+    if (stock.quantity === 0 && !referenced && !stock.archivedAt) {
+      draft.inventory = draft.inventory.filter(item => item.id !== stock.id);
+      result = { id: stock.id, removed: true, archived: false };
+      audit(draft, user, action, stock, `کالای بدون موجودی و سابقهٔ مصرف حذف شد: ${stock.name}`);
+    } else {
+      if (!stock.archivedAt) {
+        stock.archivedAt = now(); stock.archivedBy = user.id;
+        audit(draft, user, action, stock, `کالا با حفظ موجودی و سوابق از فهرست فعال حذف شد: ${stock.name}`);
+      }
+      result = { id: stock.id, removed: false, archived: true, quantity: stock.quantity };
+    }
+  } else if (action === 'inventory.restore') {
+    roleAllowed(user, ['manager', 'warehouse']);
+    const stock = find(draft.inventory, payload.id, 'کالای انبار');
+    if (stock.archivedAt) {
+      delete stock.archivedAt; delete stock.archivedBy;
+      audit(draft, user, action, stock, `کالا به فهرست فعال انبار بازگردانده شد: ${stock.name}`);
+    }
+    result = stock;
   } else fail('عملیات شناخته‌شده نیست.', 400, 'UNKNOWN_ACTION');
   const detachedResult = copy(result);
   for (const key of Object.keys(state)) delete state[key];

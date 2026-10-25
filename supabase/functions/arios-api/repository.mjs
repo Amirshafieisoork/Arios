@@ -118,7 +118,10 @@ export function createRepository(client) {
     return result(query);
   };
   const getTelegramLink = telegramUserId => result(client.from('arios_telegram_links').select(linkColumns).eq('telegram_user_id', String(telegramUserId)).maybeSingle());
-  const createLinkCode = ({ codeHash, userId, expiresAt }) => rpc('arios_link_code_create', { p_code_hash: codeHash, p_user_id: userId, p_expires_at: expiresAt });
+  const createLinkCode = ({ codeHash, userId, expiresAt }) => {
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 900000) throw new RepositoryError('مهلت کد اتصال معتبر نیست؛ کد تازه بسازید.', 400, 'INVALID_LINK_EXPIRY');
+    return rpc('arios_link_code_create', { p_code_hash: codeHash, p_user_id: userId, p_expires_at: expiresAt });
+  };
   const consumeLinkCode = async ({ codeHash, telegramUserId, chatId }) => (await rpc('arios_link_code_consume', { p_code_hash: codeHash, p_telegram_user_id: String(telegramUserId), p_chat_id: String(chatId) }))?.[0] ?? null;
   const unlinkTelegram = userId => rpc('arios_telegram_unlink', { p_user_id: userId });
   const ingestUpdates = updates => rpc('arios_updates_ingest', { p_updates: updates });
@@ -138,6 +141,14 @@ export function createRepository(client) {
   const acquireLock = (name, token, leaseMs = 300000) => rpc('arios_lock_acquire', { p_name: name, p_token: token, p_lease_ms: leaseMs });
   const releaseLock = (name, token) => rpc('arios_lock_release', { p_name: name, p_token: token });
   const rateLimit = (key, limit, windowMs = 60000) => rpc('arios_rate_limit', { p_key: key, p_limit: limit, p_window_ms: windowMs });
+  const enqueueReminders = (targetDate, entries) => rpc('arios_reminders_enqueue', { p_target_date: targetDate, p_entries: entries });
+  const claimReminder = async ({ targetDate, claim, leaseMs = 120000 }) => (await rpc('arios_reminder_claim', { p_target_date: targetDate, p_claim: claim, p_lease_ms: leaseMs }))?.[0] ?? null;
+  const finishReminder = ({ id, claim, status, errorCode = null, messageId = null, retryAfterMs = 0 }) => rpc('arios_reminder_finish', { p_id: id, p_claim: claim, p_status: status, p_error_code: errorCode, p_message_id: messageId, p_retry_after_ms: retryAfterMs });
+  const listReminders = ({ targetDate, limit = 100 } = {}) => {
+    let query = client.from('arios_reminders').select('id,user_id,target_date,status,task_count,attempts,error_code,sent_at,next_attempt_at,created_at,updated_at').order('created_at', { ascending: false }).limit(boundedLimit(limit));
+    if (targetDate) query = query.eq('target_date', targetDate);
+    return result(query);
+  };
   return {
     loadState, initState, mutateState, getSetting, setSetting, deleteSetting,
     getProfile, getProfileByDomainId, listProfileLinks, createProfile, bootstrap, commitAccount, updateAccount, authSessionValid,
@@ -146,5 +157,6 @@ export function createRepository(client) {
     listTelegramLinks, getTelegramLink, createLinkCode, consumeLinkCode, unlinkTelegram,
     ingestUpdates, listPendingUpdates, setUpdateStatus, hasTelegramHistory,
     acquireLock, releaseLock, rateLimit,
+    enqueueReminders, claimReminder, finishReminder, listReminders,
   };
 }

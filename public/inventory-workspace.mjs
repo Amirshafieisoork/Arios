@@ -7,7 +7,8 @@ const field = (label, content, full = false) => `<label class="field${full ? ' f
 const empty = (message, ctx) => `<div class="empty-state"><p>${ctx.e(message)}</p></div>`;
 const canManage = state => stockRoles.has(state.user.role);
 const projects = state => list(state.projects).filter(project => state.user.role !== 'worker' || list(project.memberIds).includes(state.user.id));
-const stock = state => list(canManage(state) ? state.inventory : state.stockCatalog);
+const stock = state => list(canManage(state) ? state.inventory : state.stockCatalog).filter(item => !item.archivedAt);
+const archivedStock = state => canManage(state) ? list(state.archivedInventory) : [];
 const scope = (state, ctx) => {
   const available = projects(state);
   return ctx.inventoryProjectId ? available.filter(project => project.id === ctx.inventoryProjectId) : available;
@@ -29,8 +30,11 @@ function stockCard(item, state, ctx) {
   const low = canManage(state) && Number(item.quantity) <= Number(item.minQuantity || 0);
   return `<article class="list-item inventory-stock-item" data-inventory-stock data-inventory-name="${ctx.e(item.name.toLocaleLowerCase('fa'))}">
     <div class="row between"><div><h3>${ctx.e(item.name)}</h3>${canManage(state) ? `<small class="muted">بهای واحد ${ctx.money(item.unitPrice)} · حداقل ${ctx.e(ctx.n(item.minQuantity))} ${ctx.e(item.unit)}</small>` : '<small class="muted">موجودی قابل برداشت برای پروژه</small>'}</div><span class="badge ${low ? 'warning' : Number(item.quantity) > 0 ? 'success' : ''}">${ctx.e(ctx.n(item.quantity))} ${ctx.e(item.unit)}</span></div>
-    <div class="actions">${canManage(state) ? `<button type="button" class="button secondary small" data-inventory-action="receive" data-inventory-id="${ctx.e(item.id)}">ورود به انبار</button>` : ''}<button type="button" class="button secondary small" data-inventory-action="consume" data-inventory-id="${ctx.e(item.id)}" ${Number(item.quantity) <= 0 || !projects(state).length ? 'disabled' : ''}>مصرف در پروژه</button></div>
+    <div class="actions">${canManage(state) ? `<button type="button" class="button secondary small" data-inventory-action="receive" data-inventory-id="${ctx.e(item.id)}">ورود به انبار</button>` : ''}<button type="button" class="button secondary small" data-inventory-action="consume" data-inventory-id="${ctx.e(item.id)}" ${Number(item.quantity) <= 0 || !projects(state).length ? 'disabled' : ''}>مصرف در پروژه</button>${canManage(state) ? `<button type="button" class="button danger small" data-inventory-action="delete" data-inventory-id="${ctx.e(item.id)}">حذف کالا</button>` : ''}</div>
   </article>`;
+}
+function archivedCard(item, ctx) {
+  return `<article class="list-item inventory-archived-item"><div class="row between"><div><h3>${ctx.e(item.name)}</h3><small class="muted">حذف از فهرست فعال در ${ctx.e(ctx.date(item.archivedAt))}</small></div><span class="badge">موجودی محفوظ ${ctx.e(ctx.n(item.quantity))} ${ctx.e(item.unit)}</span></div><p class="muted">سوابق مصرف و برگشت این کالا نگه‌داری شده‌اند.</p><button type="button" class="button secondary small" data-inventory-action="restore" data-inventory-id="${ctx.e(item.id)}">بازگردانی به فهرست فعال</button></article>`;
 }
 function materialCard(item, state, ctx) {
   const original = item.originalQuantity ?? quantity(Number(item.quantity) + Number(item.returnedQuantity || 0));
@@ -46,13 +50,14 @@ function materialCard(item, state, ctx) {
 
 export function renderInventoryWorkspace(state, ctx) {
   if (!inventoryRoles.has(state.user.role)) return empty('این بخش برای نقش شما در دسترس نیست', ctx);
-  const items = stock(state), availableProjects = scope(state, ctx), rows = materials(state, ctx), scoped = Boolean(ctx.inventoryProjectId);
+  const items = stock(state), archived = archivedStock(state), availableProjects = scope(state, ctx), rows = materials(state, ctx), scoped = Boolean(ctx.inventoryProjectId);
   const canConsume = availableProjects.length > 0 && items.some(item => Number(item.quantity) > 0);
   const consumeButton = `<button type="button" class="button primary" data-inventory-action="consume" ${canConsume ? '' : 'disabled'}>ثبت مصرف کالا</button>`;
   const heading = scoped ? `<div class="row between"><div><h2>کالاهای مصرفی پروژه</h2><p class="muted">برداشت و برگشت کالا با حفظ سوابق</p></div>${consumeButton}</div>` : `<div class="page-heading"><div><p class="eyebrow">ARIOS WORKSPACE</p><h1>${canManage(state) ? 'انبار و مصرف پروژه‌ها' : 'کالاهای مصرفی پروژه‌های من'}</h1><p class="muted">${canManage(state) ? 'ورود کالا، برداشت برای پروژه و برگشت اقلام استفاده‌نشده' : 'مصرف و برگشت کالا فقط برای پروژه‌های تخصیص‌یافتهٔ شما'}</p></div><div class="page-actions">${canManage(state) ? '<button type="button" class="button secondary" data-inventory-action="create">کالای جدید</button>' : ''}${consumeButton}</div></div>`;
   const prerequisites = !availableProjects.length ? `<div class="notice">${state.user.role === 'manager' ? 'برای ثبت مصرف، ابتدا از بخش پروژه‌ها یک پروژه بسازید' : state.user.role === 'worker' ? 'هنوز پروژه‌ای به شما تخصیص داده نشده؛ با مدیر هماهنگ کنید' : 'هنوز پروژه‌ای برای ثبت مصرف وجود ندارد؛ مدیر باید پروژه را تعریف کند'}</div>` : !items.some(item => Number(item.quantity) > 0) ? `<div class="notice">${canManage(state) ? 'برای ثبت مصرف، یک کالا تعریف و موجودی آن را وارد کنید' : 'موجودی قابل برداشت وجود ندارد؛ با انباردار هماهنگ کنید'}</div>` : '';
   const stockSection = scoped ? '' : `<section class="card"><div class="row between"><h2>موجودی انبار</h2><span class="badge">${ctx.e(ctx.n(items.length))} قلم</span></div>${items.length ? '<label class="field inventory-search"><span class="field-label">جست‌وجوی کالا</span><input type="search" data-inventory-search placeholder="نام کالا"></label>' : ''}<div class="inventory-stock-list">${items.map(item => stockCard(item, state, ctx)).join('') || empty(canManage(state) ? 'هنوز کالایی تعریف نشده؛ با «کالای جدید» نام، واحد و موجودی اولیه را ثبت کنید' : 'هنوز کالایی در انبار تعریف نشده است', ctx)}</div><p class="empty-state" data-inventory-search-empty hidden>کالایی با این نام پیدا نشد</p></section>`;
-  return `<div class="inventory-workspace">${heading}${prerequisites}${stockSection}<section class="card"><div class="row between"><h2>سوابق مصرف و برگشت</h2>${!scoped && availableProjects.length ? `<label class="filter-label">پروژه<select data-inventory-project-filter><option value="">همهٔ پروژه‌های مجاز</option>${projectOptions(availableProjects, '', ctx)}</select></label>` : ''}</div>${rows.map(item => materialCard(item, state, ctx)).join('') || empty('هنوز مصرف کالایی برای این پروژه‌ها ثبت نشده است', ctx)}<p class="empty-state" data-inventory-project-empty hidden>مصرفی برای پروژهٔ انتخاب‌شده ثبت نشده است</p></section></div>`;
+  const archivedSection = !scoped && archived.length ? `<details class="card inventory-archive"><summary>کالاهای حذف‌شده از فهرست فعال (${ctx.e(ctx.n(archived.length))})</summary><p class="muted">موجودی این اقلام صفر نشده است. برای ورود یا برداشت تازه، ابتدا کالا را به فهرست فعال بازگردانید؛ برگشت مصرف‌های قبلی همچنان قابل ثبت است.</p><div class="inventory-stock-list">${archived.map(item => archivedCard(item, ctx)).join('')}</div></details>` : '';
+  return `<div class="inventory-workspace">${heading}${prerequisites}${stockSection}${archivedSection}<section class="card"><div class="row between"><h2>سوابق مصرف و برگشت</h2>${!scoped && availableProjects.length ? `<label class="filter-label">پروژه<select data-inventory-project-filter><option value="">همهٔ پروژه‌های مجاز</option>${projectOptions(availableProjects, '', ctx)}</select></label>` : ''}</div>${rows.map(item => materialCard(item, state, ctx)).join('') || empty('هنوز مصرف کالایی برای این پروژه‌ها ثبت نشده است', ctx)}<p class="empty-state" data-inventory-project-empty hidden>مصرفی برای پروژهٔ انتخاب‌شده ثبت نشده است</p></section></div>`;
 }
 
 export function openInventoryConsumption(state, ctx, projectId = ctx.inventoryProjectId, inventoryId) {
@@ -85,6 +90,20 @@ function openReceive(state, ctx, id) {
   if (!item) return;
   ctx.modal({ title: 'ورود کالا به انبار', submitLabel: 'ثبت ورود', body: `<p><strong>${ctx.e(item.name)}</strong> · موجودی فعلی ${ctx.e(ctx.n(item.quantity))} ${ctx.e(item.unit)}</p><div class="form-grid">${field(`مقدار ورودی (${ctx.e(item.unit)})`, input('quantity', 'number', 1, 'required min="0.001" step="0.001"', ctx), true)}</div>`, onSubmit: form => ctx.mutate('inventory.receive', { id: item.id, quantity: Number(form.get('quantity')) }) });
 }
+function openDelete(state, ctx, id) {
+  if (!canManage(state)) return;
+  const item = stock(state).find(item => item.id === id);
+  if (!item) return;
+  const referenced = list(state.materials).some(material => material.inventoryId === item.id);
+  const retained = Number(item.quantity) !== 0 || referenced;
+  ctx.modal({ title: 'حذف کالای انبار', submitLabel: retained ? 'حذف از فهرست فعال' : 'تأیید حذف کالا', body: `<p><strong>${ctx.e(item.name)}</strong></p><p class="inventory-removal-quantity">موجودی فعلی: <strong>${ctx.e(ctx.n(item.quantity))} ${ctx.e(item.unit)}</strong></p><p class="notice">${retained ? 'کالا از فهرست فعال حذف می‌شود؛ موجودی فعلی و همهٔ سوابق مصرف، برگشت و هزینه حفظ می‌شوند. از بخش کالاهای حذف‌شده می‌توانید آن را بازگردانید.' : 'این کالا موجودی و سابقهٔ مصرف ندارد و حذف می‌شود. اگر هم‌زمان سابقه‌ای برای آن ثبت شده باشد، با حفظ سوابق از فهرست فعال کنار گذاشته می‌شود.'}</p><label class="checkbox-label inventory-removal-confirm"><input type="checkbox" name="confirmed" required>موجودی نمایش‌داده‌شده و نتیجهٔ حذف این کالا را بررسی و تأیید می‌کنم.</label>`, onSubmit: form => ctx.mutate('inventory.delete', { id: item.id, expectedQuantity: Number(item.quantity), confirmed: form.has('confirmed') }) });
+}
+function openRestore(state, ctx, id) {
+  if (!canManage(state)) return;
+  const item = archivedStock(state).find(item => item.id === id);
+  if (!item) return;
+  ctx.modal({ title: 'بازگردانی کالای انبار', submitLabel: 'بازگردانی به فهرست فعال', body: `<p><strong>${ctx.e(item.name)}</strong></p><p>موجودی محفوظ: ${ctx.e(ctx.n(item.quantity))} ${ctx.e(item.unit)}</p><p class="notice">پس از بازگردانی، ورود کالا و مصرف تازه برای این قلم دوباره فعال می‌شود. سوابق قبلی حفظ می‌شوند.</p>`, onSubmit: () => ctx.mutate('inventory.restore', { id: item.id }) });
+}
 function installStyles() {
   const document = globalThis.document;
   if (!document?.head || document.querySelector('link[data-inventory-styles]')) return;
@@ -103,6 +122,8 @@ export function wireInventoryWorkspace(state, ctx) {
       if (action === 'return') openReturn(state, ctx, id);
       if (action === 'create') openCreate(state, ctx);
       if (action === 'receive') openReceive(state, ctx, id);
+      if (action === 'delete') openDelete(state, ctx, id);
+      if (action === 'restore') openRestore(state, ctx, id);
     });
   });
   document.querySelector('[data-inventory-search]')?.addEventListener('input', event => {

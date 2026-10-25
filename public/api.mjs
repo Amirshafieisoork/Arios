@@ -22,6 +22,8 @@ export const api={isStatic:STATIC_PREVIEW,
  async telegramLink(payload={}){return request('telegram/link',{method:'POST',body:JSON.stringify(payload)});},
  async telegramUnlink(payload={}){return request('telegram/unlink',{method:'POST',body:JSON.stringify(payload)});},
  async telegramSync(){return request('telegram/sync',{method:'POST',body:'{}'});},
+ async reminders(){return request('reminders');},
+ async reminderSettings(payload){return request('reminders/settings',{method:'POST',body:JSON.stringify(payload)});},
  async voiceUpload(file,projectId){
   if(authMode!=='supabase'){const body=new FormData();body.append('file',file);if(projectId)body.append('projectId',projectId);return request('voice/upload',{method:'POST',body});}
   if(!file||typeof file.name!=='string'||!Number.isSafeInteger(file.size)||file.size<1||file.size>20*1024*1024)throw new Error('یک فایل صوتی تا ۲۰ مگابایت انتخاب کنید.');

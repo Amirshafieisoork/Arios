@@ -2,3 +2,7 @@
 .project-file-thumb{display:block;width:100%;height:155px;object-fit:cover;border-radius:8px;background:#f5f4f0}.project-file-thumb[hidden]{display:none}.project-file:has(.project-file-thumb:not([hidden])) .project-file-icon{display:none}
 .report-photo-download{flex-direction:column;min-width:100px;max-width:150px}.report-photo-thumb{width:125px;height:90px;object-fit:cover;border-radius:6px;background:#f5f4f0}.report-photo-thumb[hidden]{display:none}
 .report-photo-chip:has(img:not([hidden])){flex-direction:column;position:relative;padding:9px}.report-photo-chip:has(img:not([hidden])) button{position:absolute;top:10px;left:11px;border-radius:50%;background:#fff;width:25px;height:25px}
+
+.member-missions{margin-bottom:24px}.mission-instructions{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text,#24343a)!important}.member-missions .card-head>div{min-width:0}.member-missions .project-task-row>a{min-width:0}
+
+.voice-reminder-status .muted,.reminder-deliveries{font-size:11px;line-height:2}.reminder-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-block:14px}.reminder-summary>span{background:#f5f3ed;border-radius:8px;padding:9px;font-size:10px}.reminder-summary b{margin-inline-start:6px}.reminder-deliveries{margin-top:14px}.reminder-deliveries summary{cursor:pointer;color:var(--gold-dark,#967343)}.voice-reminder-status .actions{flex-wrap:wrap}.voice-reminder-status h2{font-size:13px}
