@@ -1,9 +1,9 @@
 /** Private scheduled Telegram delivery. A receipt is durable before another send is attempted. */
-import { APIError, manager, sha256 } from './auth.mjs';
+import { APIError, manager } from './auth.mjs';
 import { getConfig, receiveTelegramUpdates } from './voice-service.mjs';
 
 const ZONE = 'Asia/Tehran';
-const HASH_SETTING = 'telegram_scheduler_auth_hash';
+const SIGNING_KEY_SETTING = 'telegram_scheduler_signing_key';
 const CONFIG_SETTING = 'telegram_reminders';
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
 const clean = (value, max = 200) => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, ' ').trim().slice(0, max) : '';
@@ -48,11 +48,25 @@ function sameHash(a, b) {
   return different === 0;
 }
 
-async function schedulerAuthorization(repo, request) {
-  const token = request.headers.get('x-arios-scheduler-token') || '';
-  if (!/^[a-f0-9]{64}$/.test(token)) fail('دسترسی زمان‌بند معتبر نیست.', 401, 'SCHEDULER_UNAUTHORIZED');
-  const expected = await repo.getSetting(HASH_SETTING);
-  if (!sameHash(typeof expected === 'string' ? expected : '', await sha256(token))) fail('دسترسی زمان‌بند معتبر نیست.', 401, 'SCHEDULER_UNAUTHORIZED');
+/** The transport queue contains only a short-lived signature, never the signing key. */
+async function schedulerAuthorization(repo, request, at) {
+  const timestamp = request.headers.get('x-arios-scheduler-timestamp') || '';
+  const nonce = request.headers.get('x-arios-scheduler-nonce') || '';
+  const signature = request.headers.get('x-arios-scheduler-signature') || '';
+  const reject = () => fail('دسترسی زمان‌بند معتبر نیست.', 401, 'SCHEDULER_UNAUTHORIZED');
+  if (!/^[1-9][0-9]{9,10}$/.test(timestamp) || !/^[a-f0-9]{32}$/.test(nonce) || !/^[a-f0-9]{64}$/.test(signature)) reject();
+  const seconds = Number(timestamp), current = Math.floor(new Date(at).getTime() / 1000);
+  // Bound future skew as well as age so a five-minute nonce marker outlives every accepted signature.
+  if (!Number.isSafeInteger(seconds) || !Number.isFinite(current) || current - seconds > 180 || seconds - current > 30) reject();
+  const secret = await repo.getSetting(SIGNING_KEY_SETTING);
+  if (typeof secret !== 'string' || !/^[a-f0-9]{64}$/.test(secret)) reject();
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
+  const canonical = `POST\n/api/internal/telegram-tick\n${timestamp}\n${nonce}`;
+  const expected = Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(canonical)))).map(value => value.toString(16).padStart(2, '0')).join('');
+  if (!sameHash(signature, expected)) reject();
+  // Do not release this lease: it is the atomic replay marker, cleaned after its expiry by the dispatcher.
+  if (!(await repo.acquireLock(`telegram-scheduler-nonce:${nonce}`, crypto.randomUUID(), 300000))) reject();
 }
 
 async function telegramJSON(response) {
@@ -132,18 +146,18 @@ export async function dispatchNightlyReminders({ repo, config, fetcher = fetch, 
 
 export async function reminderStatus({repo, user, at = Date.now()}) {
   manager(user);
-  const [loaded, links, settings, config, hash, rows, tick] = await Promise.all([repo.loadState(), repo.listTelegramLinks(), repo.getSetting(CONFIG_SETTING), getConfig(repo), repo.getSetting(HASH_SETTING), repo.listReminders({limit: 100}), repo.getSetting('telegram_reminder_last_tick')]);
+  const [loaded, links, settings, config, signingKey, rows, tick] = await Promise.all([repo.loadState(), repo.listTelegramLinks(), repo.getSetting(CONFIG_SETTING), getConfig(repo), repo.getSetting(SIGNING_KEY_SETTING), repo.listReminders({limit: 100}), repo.getSetting('telegram_reminder_last_tick')]);
   const time = tehranReminderWindow(at), state = loaded?.state || {}, plans = buildReminderPlans(state, links, time.targetDate);
   const workers = new Set((state.users || []).filter(person => person.role === 'worker' && !person.deletedAt).map(person => person.id));
   const summary = Object.fromEntries(statuses.map(status => [status, (rows || []).filter(row => row.target_date === time.targetDate && row.status === status).length]));
-  return {enabled: settingObject(settings).enabled !== false, configured: Boolean(config.telegramBotToken), schedulerConfigured: /^[a-f0-9]{64}$/.test(hash || ''), time: '21:00', timezone: ZONE, targetDate: time.targetDate, linkedCount: (links || []).filter(link => workers.has(link.user_id)).length, assignedCount: plans.length, lastTickAt: typeof tick?.at === 'string' ? tick.at : null, summary, deliveries: (rows || []).map(row => ({id: row.id, userId: row.user_id, name: (state.users || []).find(person => person.id === row.user_id)?.name || 'عضو تیم', targetDate: row.target_date, status: statuses.includes(row.status) ? row.status : 'unknown', taskCount: row.task_count, attempts: row.attempts, errorCode: row.error_code || null, sentAt: row.sent_at || null, nextAttemptAt: row.next_attempt_at || null, updatedAt: row.updated_at}))};
+  return {enabled: settingObject(settings).enabled !== false, configured: Boolean(config.telegramBotToken), schedulerConfigured: /^[a-f0-9]{64}$/.test(signingKey || ''), time: '21:00', timezone: ZONE, targetDate: time.targetDate, linkedCount: (links || []).filter(link => workers.has(link.user_id)).length, assignedCount: plans.length, lastTickAt: typeof tick?.at === 'string' ? tick.at : null, summary, deliveries: (rows || []).map(row => ({id: row.id, userId: row.user_id, name: (state.users || []).find(person => person.id === row.user_id)?.name || 'عضو تیم', targetDate: row.target_date, status: statuses.includes(row.status) ? row.status : 'unknown', taskCount: row.task_count, attempts: row.attempts, errorCode: row.error_code || null, sentAt: row.sent_at || null, nextAttemptAt: row.next_attempt_at || null, updatedAt: row.updated_at}))};
 }
 
 export async function handleReminders({repo, user, request, path, fetcher = fetch, readJSON, json, env = {}, at = Date.now(), clock = Date.now, pause = wait}) {
   if (!['/api/internal/telegram-tick', '/api/reminders', '/api/reminders/settings'].includes(path)) return null;
   if (path === '/api/internal/telegram-tick') {
     if (request.method !== 'POST') fail('روش درخواست مجاز نیست.', 405, 'METHOD_NOT_ALLOWED');
-    await schedulerAuthorization(repo, request);
+    await schedulerAuthorization(repo, request, at);
     await readJSON(request, 1024);
     // Receive account starts and voice metadata without invoking an AI provider or sending a reply.
     let received;

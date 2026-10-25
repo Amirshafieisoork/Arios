@@ -1,22 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildReminderPlans, tehranReminderWindow, sendTelegramReminder, dispatchNightlyReminders, reminderStatus, handleReminders } from '../supabase/functions/arios-api/reminder-service.mjs';
-import { sha256 } from '../supabase/functions/arios-api/auth.mjs';
+import { createHmac } from 'node:crypto';
 
 const AT = Date.parse('2026-10-25T17:30:00Z'); // 21:00 Tehran
 const TARGET = '2026-10-26';
 const TOKEN = '123456:test_only_telegram_token_1234567890';
+const SIGNING_KEY = 'c'.repeat(64);
+function signedHeaders({timestamp = String(Math.floor(AT / 1000)), nonce = crypto.randomUUID().replaceAll('-', ''), key = SIGNING_KEY, path = '/api/internal/telegram-tick'} = {}) {
+  const signature = createHmac('sha256', key).update(`POST\n${path}\n${timestamp}\n${nonce}`).digest('hex');
+  return {'Content-Type':'application/json', 'x-arios-scheduler-timestamp':timestamp, 'x-arios-scheduler-nonce':nonce, 'x-arios-scheduler-signature':signature};
+}
+const tickRequest = (headers, body = '{}') => new Request('https://arios.test/api/internal/telegram-tick', {method:'POST', headers, body});
+const tick = (f, request) => handleReminders({repo:f.repo, request, path:'/api/internal/telegram-tick', readJSON:async r=>r.json(), json:respond, fetcher:async()=>assert.fail('No bot configured for authentication tests'), at:AT, clock:()=>AT, pause:async()=>{}});
 const respond = (data, status = 200) => new Response(JSON.stringify(data), {status, headers: {'Content-Type': 'application/json'}});
 function fixture(size = 35) {
   const users = [{id:'manager',name:'مدیر',role:'manager'}, ...Array.from({length:size},(_,i)=>({id:`w${i}`,name:`همکار ${i}`,role:'worker'}))];
   const state = {users, projects: [{id:'p1',name:'پروژهٔ فردا',status:'active',memberIds:users.filter(u=>u.role==='worker').map(u=>u.id),tasks:users.filter(u=>u.role==='worker').map((u,i)=>({id:`t${i}`,title:`نصب و بررسی ${i}`,description:'هماهنگی با مدیر پروژه',assigneeId:u.id,dueDate:TARGET,status:'open'}))}]};
   const links = users.filter(u=>u.role==='worker').map((u,i)=>({user_id:u.id,chat_id:String(10000+i),telegram_user_id:String(10000+i)}));
   const settings = new Map([['integrations',{telegramBotToken:TOKEN}],['telegram_reminders',{enabled:true}]]), rows = new Map(), calls = [];
-  let locked = false;
+  const locks = new Map();
   const repo = {
     getSetting:async key=>settings.get(key),setSetting:async(key,value)=>settings.set(key,value),
     loadState:async()=>({state:structuredClone(state)}),listTelegramLinks:async()=>structuredClone(links),
-    acquireLock:async()=>{if(locked)return false;locked=true;return true;},releaseLock:async()=>{locked=false;},
+    acquireLock:async(name,token)=>{if(locks.has(name))return false;locks.set(name,token);return true;},releaseLock:async(name,token)=>{if(locks.get(name)===token)locks.delete(name);},
     enqueueReminders:async(targetDate,entries)=>{for(const e of entries){const key=e.userId+targetDate,current=rows.get(key);if(!current)rows.set(key,{id:crypto.randomUUID(),user_id:e.userId,target_date:targetDate,chat_id:e.chatId,body:e.body,task_count:e.taskCount,status:'pending',attempts:0,next_attempt_at:new Date(AT).toISOString(),updated_at:new Date(AT).toISOString()});else if(['pending','cancelled'].includes(current.status))Object.assign(current,{chat_id:e.chatId,body:e.body,task_count:e.taskCount,status:'pending'});}for(const row of rows.values())if(row.target_date===targetDate&&row.status==='pending'&&!entries.some(e=>e.userId===row.user_id))row.status='cancelled';},
     claimReminder:async({targetDate,claim})=>{const row=[...rows.values()].find(row=>row.target_date===targetDate&&row.status==='pending'&&row.attempts<3&&Date.parse(row.next_attempt_at)<=AT);if(!row)return null;Object.assign(row,{status:'sending',claim,attempts:row.attempts+1});return structuredClone(row);},
     finishReminder:async outcome=>{const row=[...rows.values()].find(row=>row.id===outcome.id&&row.claim===outcome.claim&&row.status==='sending');if(!row)return false;Object.assign(row,{status:outcome.status,error_code:outcome.errorCode||null,message_id:outcome.messageId||null,claim:null,sent_at:outcome.status==='sent'?new Date(AT).toISOString():null,...(outcome.status==='pending'?{next_attempt_at:new Date(AT+outcome.retryAfterMs).toISOString()}: {})});return true;},
@@ -24,7 +31,7 @@ function fixture(size = 35) {
   };
   const fetcher=async(url,options)=>{calls.push({url,options});return respond({ok:true,result:{message_id:calls.length}});};
   const run=(options={})=>dispatchNightlyReminders({repo,config:{telegramBotToken:TOKEN},fetcher,at:AT,clock:()=>AT,pause:async()=>{},...options});
-  return {state,links,settings,rows,calls,repo,fetcher,run};
+  return {state,links,settings,rows,calls,locks,repo,fetcher,run};
 }
 
 test('reminder time uses Tehran day boundary, fixed21window, and correct tomorrow across year change',()=>{
@@ -114,21 +121,64 @@ test('Telegram parsing and redirects never expose secrets and distinguish defini
   }
 });
 
-test('only authenticated manager sees safe reminder status, and scheduler requests require a valid dedicated token',async()=>{
-  const f=fixture(1);await f.run();f.settings.set('telegram_scheduler_auth_hash',await sha256('a'.repeat(64)));
+test('only authenticated manager sees safe reminder status and never the private signing key',async()=>{
+  const f=fixture(1);await f.run();f.settings.set('telegram_scheduler_signing_key',SIGNING_KEY);
   const data=await reminderStatus({repo:f.repo,user:{role:'manager'},at:AT});assert.equal(data.linkedCount,1);assert.equal(data.assignedCount,1);assert.equal(data.summary.sent,1);assert.equal(data.schedulerConfigured,true);
-  const exposed=JSON.stringify(data);for(const secret of [TOKEN,'chat_id','body','10000'])assert(!exposed.includes(secret));
+  const exposed=JSON.stringify(data);for(const secret of [TOKEN,SIGNING_KEY,'chat_id','body','10000'])assert(!exposed.includes(secret));
   for(const role of ['worker','customer','warehouse','accountant',undefined])await assert.rejects(reminderStatus({repo:f.repo,user:{role},at:AT}),e=>e.status===403);
-  for(const token of ['', 'b'.repeat(64)]){
-    const request=new Request('https://arios.test/api/internal/telegram-tick',{method:'POST',headers:{'Content-Type':'application/json','x-arios-scheduler-token':token},body:'{}'});
-    await assert.rejects(handleReminders({repo:f.repo,request,path:'/api/internal/telegram-tick',readJSON:async()=>({}),json:respond,at:AT,clock:()=>AT}),e=>e.status===401&&e.code==='SCHEDULER_UNAUTHORIZED');
+  f.settings.set('telegram_scheduler_signing_key','not a signing key');
+  assert.equal((await reminderStatus({repo:f.repo,user:{role:'manager'},at:AT})).schedulerConfigured,false);
+});
+
+test('scheduler rejects missing, legacy, expired, future and tampered credentials before state or delivery work',async()=>{
+  const base=signedHeaders();
+  const invalid=[
+    {'Content-Type':'application/json'},
+    {'Content-Type':'application/json','x-arios-scheduler-token':'a'.repeat(64)},
+    {...base,'x-arios-scheduler-signature':'0'.repeat(64)},
+    {...base,'x-arios-scheduler-nonce':'e'.repeat(32)},
+    {...base,'x-arios-scheduler-timestamp':String(Math.floor(AT/1000)-1)},
+    signedHeaders({timestamp:String(Math.floor(AT/1000)-181)}),
+    signedHeaders({timestamp:String(Math.floor(AT/1000)+31)}),
+    signedHeaders({path:'/api/other-operation'}),
+    signedHeaders({nonce:'not-a-valid-nonce'}),
+    signedHeaders({key:'d'.repeat(64)}),
+  ];
+  for(const headers of invalid){
+    const f=fixture(1);f.settings.set('telegram_scheduler_signing_key',SIGNING_KEY);
+    f.repo.loadState=async()=>assert.fail('Unauthorized scheduler must not read operational state');
+    await assert.rejects(tick(f,tickRequest(headers)),e=>e.status===401&&e.code==='SCHEDULER_UNAUTHORIZED');
+    assert.equal(f.locks.size,0);assert.equal(f.calls.length,0);assert.equal(f.rows.size,0);
   }
 });
 
-test('a valid scheduler credential permits the unattended tick but not caller-selected dates or leaked credentials',async()=>{
-  const f=fixture(1);f.settings.set('integrations',{});f.settings.set('telegram_scheduler_auth_hash',await sha256('a'.repeat(64)));
-  const request=new Request('https://arios.test/api/internal/telegram-tick',{method:'POST',headers:{'Content-Type':'application/json','x-arios-scheduler-token':'a'.repeat(64)},body:'{"targetDate":"2099-01-01"}'});
-  const response=await handleReminders({repo:f.repo,request,path:'/api/internal/telegram-tick',readJSON:async r=>r.json(),json:respond,fetcher:async()=>assert.fail('No bot configured'),at:AT,clock:()=>AT,pause:async()=>{}});
+test('valid HMAC permits a tick without caller-selected dates or key disclosure and a consumed nonce cannot replay',async()=>{
+  const f=fixture(1);f.settings.set('integrations',{});f.settings.set('telegram_scheduler_signing_key',SIGNING_KEY);
+  const headers=signedHeaders(),nonce=headers['x-arios-scheduler-nonce'];
+  const response=await tick(f,tickRequest(headers,'{"targetDate":"2099-01-01"}'));
   const data=await response.json();assert.equal(data.ok,true);assert.equal(data.targetDate,TARGET);assert.equal(data.skipped,true);assert.equal(f.settings.get('telegram_reminder_last_tick').at,new Date(AT).toISOString());
-  assert(!JSON.stringify(data).includes('a'.repeat(64)));
+  assert(f.locks.has('telegram-scheduler-nonce:'+nonce),'Successful request retains its replay marker');
+  assert(!JSON.stringify(data).includes(SIGNING_KEY));
+  await assert.rejects(tick(f,tickRequest(headers)),e=>e.status===401&&e.code==='SCHEDULER_UNAUTHORIZED');
+  const other=await tick(f,tickRequest(signedHeaders()));assert.equal(other.status,200);
+});
+
+test('concurrent signed replay can enter the unattended tick only once',async()=>{
+  const f=fixture(1);f.settings.set('integrations',{});f.settings.set('telegram_scheduler_signing_key',SIGNING_KEY);
+  const headers=signedHeaders();
+  const results=await Promise.allSettled([tick(f,tickRequest(headers)),tick(f,tickRequest(headers))]);
+  assert.equal(results.filter(result=>result.status==='fulfilled').length,1);
+  const rejected=results.find(result=>result.status==='rejected');assert.equal(rejected.reason.status,401);assert.equal(rejected.reason.code,'SCHEDULER_UNAUTHORIZED');
+  assert.equal(f.calls.length,0);assert.equal(f.locks.size,1);
+});
+
+test('accepted timestamp boundaries fit inside the unreleased replay-marker lifetime',async()=>{
+  for(const seconds of [-180,30]){
+    const f=fixture(1);f.settings.set('integrations',{});f.settings.set('telegram_scheduler_signing_key',SIGNING_KEY);
+    const leases=[],acquire=f.repo.acquireLock;f.repo.acquireLock=async(...args)=>{leases.push(args);return acquire(...args);};
+    const headers=signedHeaders({timestamp:String(Math.floor(AT/1000)+seconds)});
+    assert.equal((await tick(f,tickRequest(headers))).status,200);
+    const marker=leases.find(args=>args[0].startsWith('telegram-scheduler-nonce:'));assert.equal(marker[2],300000);
+    const replay=await tick(f,tickRequest(headers)).then(()=>false,error=>error.code==='SCHEDULER_UNAUTHORIZED');assert.equal(replay,true);
+  }
 });

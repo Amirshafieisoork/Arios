@@ -87,6 +87,26 @@ test('Telegram reminder configuration and delivery status require a workspace se
   }
 });
 
+test('a signed scheduler tick bypasses user login only once and exposes no signing credential', async () => {
+  const f = fixture(), key = 'b'.repeat(64), nonce = 'c'.repeat(32), timestamp = String(Math.floor(Date.now() / 1000));
+  const canonical = `POST\n/api/internal/telegram-tick\n${timestamp}\n${nonce}`;
+  const signingKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
+  const signature = Buffer.from(await crypto.subtle.sign('HMAC', signingKey, new TextEncoder().encode(canonical))).toString('hex');
+  const markers = new Set(); let ticks = 0;
+  f.repo.getSetting = async name => name === 'telegram_scheduler_signing_key' ? key : {};
+  f.repo.setSetting = async name => { assert.equal(name, 'telegram_reminder_last_tick'); ticks++; };
+  f.repo.acquireLock = async name => { if (markers.has(name)) return false; markers.add(name); return true; };
+  const request = () => new Request('https://edge.example/functions/v1/arios-api/internal/telegram-tick', {method: 'POST', headers: {
+    'Content-Type': 'application/json', 'x-arios-scheduler-timestamp': timestamp,
+    'x-arios-scheduler-nonce': nonce, 'x-arios-scheduler-signature': signature,
+  }, body: '{}'});
+  const response = await f.handle(request());
+  assert.equal(response.status, 200);
+  const text = await response.text(); assert(!text.includes(key)); assert(!text.includes(signature));
+  assert.equal(ticks, 1); assert.equal(f.calls.auth, 0); assert.equal(f.calls.state, 0); assert.equal(f.calls.provider, 0);
+  const replay = await f.handle(request()); assert.equal(replay.status, 401); assert.equal(ticks, 1);
+});
+
 test('Edge health reports the released backend version without exposing integrations', async () => {
   const f = fixture(), response = await f.handle(f.request('/health'));
   assert.equal(response.status, 200);
