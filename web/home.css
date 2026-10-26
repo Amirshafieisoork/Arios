@@ -1,0 +1,67 @@
+@font-face{font-family:Arios;src:url('/assets/fonts/Vazirmatn-400.ttf') format('truetype');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:Arios;src:url('/assets/fonts/Vazirmatn-700.ttf') format('truetype');font-weight:700;font-style:normal;font-display:swap}
+:root{color-scheme:dark;font-family:Arios,Tahoma,sans-serif;color:#f8f5ed;background:#17252a;font-synthesis:none}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(ellipse at 50% 0,rgba(183,150,98,.1),transparent 65%);min-width:280px}
+a{color:inherit;text-decoration:none;-webkit-tap-highlight-color:transparent}
+svg{display:block}
+a:focus-visible{outline:3px solid #e8c28a;outline-offset:6px}
+.skip-link{position:fixed;top:12px;right:16px;z-index:10;transform:translateY(-160%);padding:12px 18px;border-radius:8px;background:#fbf7ee;color:#17252a}
+.skip-link:focus{transform:translateY(0)}
+.portal-home{width:min(100%,1080px);min-height:100vh;min-height:100svh;margin-inline:auto;padding:34px 40px 24px;display:flex;flex-direction:column;gap:26px}
+.home-header{display:flex;justify-content:center}
+.home-brand{display:flex;align-items:center;gap:13px;color:#dbbe91;border-radius:4px}
+.brand-mark{width:47px;height:50px}
+.home-brand b{display:block;font-family:Arios,Tahoma,sans-serif;font-size:28px;line-height:1.25;letter-spacing:4px;font-weight:400}
+.home-brand small{display:block;color:#c4c9c7;font-size:11px;margin-top:6px}
+.home-main{flex:1;display:flex;flex-direction:column;justify-content:center;gap:34px;padding-block:16px 28px}
+.home-intro{text-align:center}
+.home-intro h1{font-size:25px;line-height:1.7;font-weight:400;margin:0}
+.home-intro p{font-size:14px;line-height:1.9;color:#bbc4c3;margin:8px 0 0}
+.portal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+.portal-entry{display:grid;gap:22px;min-height:304px;padding:32px;border:1px solid transparent;border-radius:20px;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+.portal-entry:hover{transform:translateY(-4px);box-shadow:0 16px 38px #0002}
+.portal-client{background:#f9f5ec;color:#192b30;border-color:#f9f5ec}
+.portal-team{background:#213238;border-color:#667064;color:#faf6ec}
+.portal-team:hover{border-color:#c4a471}
+.portal-symbol{width:58px;height:58px;display:grid;place-items:center;border-radius:15px;background:#eae0cd;color:#806137}
+.portal-symbol svg{width:32px;height:32px;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+.portal-team .portal-symbol{background:#c1a0711f;color:#e5c597}
+.portal-copy h2{font-size:34px;line-height:1.65;font-weight:700;margin:0}
+.portal-copy p{font-size:13px;line-height:1.9;color:#56676b;margin:6px 0 0}
+.portal-team .portal-copy p{color:#c1ccce}
+.portal-action{display:flex;justify-content:space-between;align-items:center;gap:16px;border-top:1px solid #d9d5ca;padding-top:20px;align-self:end;font-size:14px;font-weight:700;line-height:1.8}
+.portal-team .portal-action{border-color:#ffffff26;color:#edd2a9}
+.portal-action svg{width:23px;height:23px;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.home-footer{text-align:center;color:#9aabae;font-size:10px;letter-spacing:3px;line-height:1.6}
+@media(max-width:650px){
+  .portal-home{padding:24px 22px 18px;gap:20px}
+  .home-main{gap:24px;padding-block:8px 14px}
+  .home-intro h1{font-size:23px}
+  .home-intro p{font-size:13px;margin-top:5px}
+  .portal-grid{grid-template-columns:1fr;gap:16px}
+  .portal-entry{grid-template-columns:46px minmax(0,1fr);align-items:center;min-height:0;padding:23px;gap:17px 15px;border-radius:16px}
+  .portal-symbol{width:46px;height:46px;border-radius:12px}
+  .portal-symbol svg{width:28px;height:28px}
+  .portal-copy h2{font-size:27px;line-height:1.6}
+  .portal-copy p{font-size:12px;line-height:1.85;margin-top:4px}
+  .portal-action{grid-column:1/-1;padding-top:15px;font-size:13px}
+}
+@media(max-width:380px),(max-height:700px) and (max-width:650px){
+  .portal-home{padding:18px;gap:15px}
+  .brand-mark{width:38px;height:42px}
+  .home-brand b{font-size:25px}
+  .home-brand small{font-size:10px;margin-top:3px}
+  .home-main{gap:19px;padding-block:4px 8px}
+  .home-intro h1{font-size:21px}
+  .home-intro p{font-size:12px}
+  .portal-grid{gap:13px}
+  .portal-entry{padding:19px;gap:12px;border-radius:14px;grid-template-columns:40px minmax(0,1fr)}
+  .portal-symbol{width:40px;height:40px}
+  .portal-symbol svg{width:25px;height:25px}
+  .portal-copy h2{font-size:25px}
+  .portal-copy p{font-size:11px}
+  .portal-action{font-size:12px;padding-top:12px}
+}
+@media(prefers-reduced-motion:reduce){.portal-entry{transition:none}.portal-entry:hover{transform:none}}
+@media(forced-colors:active){.portal-entry{border:2px solid LinkText}.portal-symbol,.portal-action{color:LinkText}}
