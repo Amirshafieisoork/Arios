@@ -1,4 +1,6 @@
 import { normalizePhone, normalizeUsername, internalAuthEmail } from './identity.mjs';
+import { applyDossierAction, safeDossierSubmission, safeDossierWorksheet } from './dossier-model.mjs';
+import { applyDossierWorkflow } from './approval-workflow.mjs';
 /** ARIOS domain. All amounts are whole toman; elapsed work is integer minutes. */
 export class DomainError extends Error {
   constructor(message, status = 400, code = 'INVALID_INPUT') {
@@ -66,6 +68,41 @@ export function projectAccess(state, userOrId, projectId) {
   if (!user || user.deletedAt || !project) return false;
   return user.role === 'manager' || (user.role === 'customer' && project.customerId === user.id) || (user.role === 'worker' && project.memberIds.includes(user.id));
 }
+const reviewerRoles = ['manager', 'worker', 'accountant'];
+const assignedStages = (submission, userId) => (submission?.approval?.stages || []).some(stage => stage.userId === userId);
+export function projectReviewerAccess(state, userOrId, projectId) {
+  const userId = typeof userOrId === 'object' ? userOrId?.id : userOrId;
+  const user = state.users.find(item => item.id === userId), project = state.projects.find(item => item.id === projectId);
+  if (!user || user.deletedAt || !reviewerRoles.includes(user.role) || !project) return false;
+  return project.projectManagerId === user.id || (project.reviewChain || []).some(stage => stage.userId === user.id) || assignedStages(project.dossierSubmission,user.id) || (project.dossierSubmissionHistory || []).some(submission => assignedStages(submission,user.id));
+}
+export function projectReadAccess(state, userOrId, projectId) {
+  const userId = typeof userOrId === 'object' ? userOrId?.id : userOrId;
+  const user = state.users.find(item => item.id === userId);
+  return projectAccess(state,userId,projectId) || Boolean(user && !user.deletedAt && user.role === 'accountant' && state.projects.some(project => project.id === projectId)) || projectReviewerAccess(state,userId,projectId);
+}
+export const PROJECT_APPROVAL_LABELS = Object.freeze(['مسئول پروژه', 'مسئول واحد', 'مدیر گروه فنی', 'واحد فروش', 'واحد مالی', 'مدیرعامل']);
+export function normalizeProjectCode(value) {
+  return typeof value === 'string' ? value.normalize('NFKC').replace(/[۰-۹]/g,char=>String(char.charCodeAt(0)-1776)).replace(/[٠-٩]/g,char=>String(char.charCodeAt(0)-1632)).replace(/[\u200c\u200e\u200f]/g,'').trim().toUpperCase() : '';
+}
+function projectMetadata(state, payload, previous = {}) {
+  const fields = ['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','reviewChain'];
+  const values = {...pick(previous,fields),...pick(payload,fields)};
+  const projectCode = normalizeProjectCode(text(values.projectCode,'کد پروژه',{max:80}));
+  if (!projectCode || /[\u0000-\u001f\u007f]/.test(projectCode)) fail('کد پروژه معتبر نیست.');
+  if (state.projects.some(project => project.id !== previous.id && normalizeProjectCode(project.projectCode) === projectCode)) fail('این کد قبلاً برای پروژهٔ دیگری ثبت شده است.',409,'DUPLICATE_PROJECT_CODE');
+  const lead = find(state.users,text(values.projectManagerId,'مسئول پروژه',{max:120}),'مسئول پروژه');
+  if (lead.deletedAt || !['manager','worker'].includes(lead.role)) fail('مسئول پروژه باید مدیر یا نیروی اجرایی فعال باشد.');
+  if (!Array.isArray(values.reviewChain) || values.reviewChain.length !== 6) fail('مسئول هر شش مرحلهٔ تأیید را تعیین کنید.');
+  const reviewChain = values.reviewChain.map((stage,index) => {
+    if (!record(stage) || (stage.label !== undefined && stage.label !== PROJECT_APPROVAL_LABELS[index])) fail('ترتیب شش مسئولیت تأیید معتبر نیست.');
+    const person = find(state.users,text(stage.userId,'تأییدکننده',{max:120}),'تأییدکننده');
+    if (person.deletedAt || !reviewerRoles.includes(person.role)) fail('تأییدکننده باید حساب فعال مدیر، نیرو یا حسابدار باشد.');
+    if (index === 0 && person.id !== lead.id) fail('نخستین تأیید باید با مسئول پروژه باشد.');
+    return {label:PROJECT_APPROVAL_LABELS[index],userId:person.id};
+  });
+  return {projectCode,projectManagerId:lead.id,reviewChain,customerCode:normalizeProjectCode(text(values.customerCode,'شماره مشتری',{optional:true,max:80})),dossierCode:normalizeProjectCode(text(values.dossierCode,'شماره پرونده',{optional:true,max:80})),dossierTitle:text(values.dossierTitle,'عنوان پرونده',{optional:true,max:200})};
+}
 function requireProject(state, user, projectId) {
   if (!projectAccess(state, user, projectId)) fail('به این پروژه دسترسی ندارید.', 403, 'FORBIDDEN');
   return state.projects.find(project => project.id === projectId);
@@ -106,6 +143,27 @@ function safeReport(report, includeRates) {
   if (includeRates) Object.assign(result, pick(report, ['rate', 'laborCost']));
   return result;
 }
+function dossierDescriptor(submission) {
+  const descriptor = safeDossierSubmission({...submission,snapshot:undefined,approval:submission.approval ? {...submission.approval,history:undefined} : undefined},false);
+  if (descriptor.approval) {
+    delete descriptor.approval.history;
+    descriptor.approval.historyCount = (submission.approval.history || []).length;
+  }
+  return descriptor;
+}
+/** Load one frozen document explicitly; account objects supplied by clients are not authority. */
+export function readDossierSubmission(state,userOrId,projectId,submissionId) {
+  const user = getUser(state,userOrId);
+  if (!reviewerRoles.includes(user.role)) fail('گزارش تفصیلی برای حساب شما در دسترس نیست.',403,'FORBIDDEN');
+  const project = find(state.projects,text(projectId,'شناسه پروژه',{max:120}),'پروژه');
+  const selectedId = text(submissionId,'شناسه نسخه',{max:120});
+  const submission = [project.dossierSubmission,...(project.dossierSubmissionHistory || [])].find(item=>item?.id===selectedId);
+  if (!submission) fail('نسخهٔ پرونده یافت نشد.',404,'DOSSIER_SUBMISSION_NOT_FOUND');
+  const financial = ['manager','accountant'].includes(user.role);
+  const configuredReviewer = project.projectManagerId===user.id || (project.reviewChain || []).some(stage=>stage.userId===user.id);
+  if (!financial && !configuredReviewer && !assignedStages(submission,user.id)) fail('این نسخهٔ پرونده برای شما در دسترس نیست.',403,'FORBIDDEN');
+  return safeDossierSubmission(submission,financial);
+}
 const safeMessage = message => pick(message, ['id', 'projectId', 'authorId', 'text', 'internal', 'createdAt']);
 function safeTicket(ticket) {
   const result = pick(ticket, ['id', 'projectId', 'authorId', 'subject', 'description', 'status', 'priority', 'createdAt']);
@@ -122,39 +180,60 @@ export function publicState(state, userId) {
   const isAccountant = user.role === 'accountant';
   const finance = isManager || isAccountant;
   const stockManager = isManager || isWarehouse;
-  const projects = state.projects.filter(project => isWarehouse || isAccountant || projectAccess(state, user, project.id));
+  const projects = state.projects.filter(project => isWarehouse || projectReadAccess(state, user, project.id));
   const projectIds = new Set(projects.map(project => project.id));
   const scoped = list => list.filter(item => projectIds.has(item.projectId));
-  const tickets = isWarehouse || isAccountant ? [] : scoped(state.tickets);
-  const messages = isWarehouse || isAccountant ? [] : scoped(state.messages).filter(message => user.role !== 'customer' || !message.internal);
+  const canExecute = projectId => projectAccess(state,user,projectId);
+  const liveReviewer = project => reviewerRoles.includes(user.role) && (project.projectManagerId === user.id || (project.reviewChain || []).some(stage => stage.userId === user.id));
+  const tickets = isWarehouse || isAccountant ? [] : scoped(state.tickets).filter(ticket => canExecute(ticket.projectId));
+  const messages = isWarehouse || isAccountant ? [] : scoped(state.messages).filter(message => canExecute(message.projectId) && (user.role !== 'customer' || !message.internal));
   const contactIds = new Set([user.id]);
+  const referenceIds = new Set();
   if (!isWarehouse && !isAccountant) for (const project of projects) {
-    for (const memberId of project.memberIds || []) contactIds.add(memberId);
-    for (const contactId of project.contactIds || []) contactIds.add(contactId);
-    if (project.customerId) contactIds.add(project.customerId);
+    for (const memberId of project.memberIds || []) (canExecute(project.id) ? contactIds : referenceIds).add(memberId);
+    for (const contactId of project.contactIds || []) if (canExecute(project.id)) contactIds.add(contactId);
+    if (project.customerId) (canExecute(project.id) ? contactIds : referenceIds).add(project.customerId);
+    if (project.projectManagerId) referenceIds.add(project.projectManagerId);
+    for (const stage of project.reviewChain || []) referenceIds.add(stage.userId);
+    if (liveReviewer(project)) for (const report of state.reports.filter(report=>report.projectId===project.id)) referenceIds.add(report.workerId);
+    for (const submission of [project.dossierSubmission,...(project.dossierSubmissionHistory || [])]) if (assignedStages(submission,user.id)) {
+      for (const stage of submission.approval.stages || []) referenceIds.add(stage.userId);
+    }
   }
   for (const material of scoped(state.materials)) {
-    if (material.recordedBy) contactIds.add(material.recordedBy);
-    for (const returned of material.returns || []) if (returned.recordedBy) contactIds.add(returned.recordedBy);
+    if (material.recordedBy) referenceIds.add(material.recordedBy);
+    for (const returned of material.returns || []) if (returned.recordedBy) referenceIds.add(returned.recordedBy);
   }
   for (const message of messages) contactIds.add(message.authorId);
   for (const ticket of tickets) { contactIds.add(ticket.authorId); for (const reply of ticket.replies || []) contactIds.add(reply.authorId); }
   if (!isWarehouse && !isAccountant) for (const person of state.users) if (person.role === 'manager') contactIds.add(person.id);
   const result = {
     user: safeUser(user, finance),
-    users: state.users.filter(person => finance || contactIds.has(person.id)).map(person => {
+    users: state.users.filter(person => finance || contactIds.has(person.id) || referenceIds.has(person.id)).map(person => {
       if (person.id === user.id || isManager) return {...safeUser(person, finance),...(isManager?pick(person,['availability','workStart','workEnd']):{})};
       if (isWarehouse) return pick(person, ['id', 'name', 'role', 'deletedAt']);
       if (isAccountant) return pick(person, ['id', 'name', 'role', 'hourlyRate', 'rateHistory', 'deletedAt']);
-      return safeUser(person);
+      return contactIds.has(person.id) ? safeUser(person) : pick(person,['id','name','role','deletedAt','employeeCode','personnelCode']);
     }),
     projects: projects.map(project => {
-      if (isWarehouse) return pick(project, ['id', 'name', 'type', 'status']);
+      if (isWarehouse) return pick(project, ['id', 'name', 'type', 'status', 'projectCode']);
       const item = pick(project, isAccountant ? ['id', 'name', 'type', 'customerId', 'memberIds', 'status', 'progress', 'startDate', 'endDate', 'cover'] : ['id', 'name', 'type', 'customerId', 'memberIds', 'contactIds', 'location', 'status', 'progress', 'startDate', 'endDate', 'description', 'phases', 'cover', 'clientNote']);
-      if (!isAccountant) {
-        if (isManager || isWorker) item.tasks = (project.tasks || []).map(task => pick(task, ['id', 'title', 'description', 'assigneeId', 'dueDate', 'status', 'version', 'createdAt', 'updatedAt']));
-        item.files = (project.files || []).filter(file => file.status === 'ready' && (!file.draftId || file.reportId || file.uploadedBy === user.id) && (user.role !== 'customer' || file.clientVisible === true)).map(file => pick(file, ['id', 'name', 'mimeType', 'size', 'uploadedBy', 'createdAt', 'clientVisible', 'reportId']));
+      Object.assign(item,pick(project,['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle']));
+      item.canRecordWork = ['manager','worker'].includes(user.role) && canExecute(project.id);
+      if (finance || isWorker) {
+        item.dossierVersion = project.dossier?.version || 0;
+        Object.assign(item,pick(project,['reviewChain']));
+        if (finance && project.dossier) item.dossier = safeDossierWorksheet(project.dossier,true);
+        if (project.dossierSubmission && (finance || liveReviewer(project) || assignedStages(project.dossierSubmission,user.id))) item.dossierSubmission = dossierDescriptor(project.dossierSubmission);
+        if (project.dossierSubmissionHistory) item.dossierSubmissionHistory = project.dossierSubmissionHistory.filter(submission=>finance || liveReviewer(project) || assignedStages(submission,user.id)).map(dossierDescriptor);
       }
+      if (!isAccountant) {
+        if ((isManager || isWorker) && canExecute(project.id)) item.tasks = (project.tasks || []).map(task => pick(task, ['id', 'title', 'description', 'assigneeId', 'dueDate', 'status', 'version', 'createdAt', 'updatedAt']));
+      }
+      const reviewPhotoIds = new Set();
+      if (liveReviewer(project)) for (const report of state.reports.filter(report=>report.projectId===project.id)) for (const photoId of report.photoIds || []) reviewPhotoIds.add(photoId);
+      for (const submission of [project.dossierSubmission,...(project.dossierSubmissionHistory || [])]) if (assignedStages(submission,user.id)) for (const report of submission.snapshot?.reports || []) for (const photoId of report.photoIds || []) reviewPhotoIds.add(photoId);
+      if (!isAccountant || reviewPhotoIds.size) item.files = (project.files || []).filter(file => file.status === 'ready' && (!file.draftId || file.reportId || file.uploadedBy === user.id) && (canExecute(project.id) ? (user.role !== 'customer' || file.clientVisible === true) : reviewPhotoIds.has(file.id) && ['image/jpeg','image/png','image/webp'].includes(file.mimeType) && (!file.draftId || file.reportId))).map(file => pick(file, ['id', 'name', 'mimeType', 'size', 'uploadedBy', 'createdAt', 'clientVisible', 'reportId']));
       if (finance) {
         Object.assign(item, pick(project, ['budget', 'contractAmount']));
         if (isManager) Object.assign(item, pick(project, ['publicVisible', 'publicTitle', 'publicSummary']));
@@ -162,8 +241,8 @@ export function publicState(state, userId) {
       } else if (!isWorker) Object.assign(item, pick(project, ['contractAmount']));
       return item;
     }),
-    reports: user.role === 'customer' || isWarehouse ? [] : scoped(state.reports).filter(report => finance || report.workerId === user.id).map(report => safeReport(report, finance)),
-    materials: scoped(state.materials).filter(material => user.role !== 'customer' || material.clientVisible).map(material => safeMaterial(material, !isWorker, stockManager || isWorker)),
+    reports: user.role === 'customer' || isWarehouse ? [] : scoped(state.reports).filter(report => finance || (report.workerId === user.id && canExecute(report.projectId)) || liveReviewer(state.projects.find(project=>project.id===report.projectId))).map(report => safeReport(report, finance)),
+    materials: scoped(state.materials).filter(material => (isWarehouse || finance || canExecute(material.projectId) || liveReviewer(state.projects.find(project=>project.id===material.projectId))) && (user.role !== 'customer' || material.clientVisible)).map(material => safeMaterial(material, !isWorker, stockManager || isWorker)),
     invoices: isWorker || isWarehouse ? [] : scoped(state.invoices).map(invoice => pick(invoice, ['id', 'projectId', 'title', 'amount', 'paid', 'dueDate', 'status'])),
     messages: messages.map(safeMessage),
     tickets: tickets.map(safeTicket),
@@ -227,10 +306,12 @@ export function applyAction(state, userId, action, payload = {}) {
     if (endDate < startDate) fail('پایان پروژه نباید پیش از شروع باشد.');
     const cover = /event|مراسم|همایش/i.test(type) ? 'event' : /electric|برق/i.test(type) ? 'electric' : /media|رسانه/i.test(type) ? 'media' : 'building';
     result = { id: id('p'), name, type, customerId, memberIds, location: text(payload.location, 'موقعیت', { max: 240 }), status: 'active', progress: 0, budget: integer(payload.budget, 'بودجه'), contractAmount: integer(payload.contractAmount, 'مبلغ قرارداد'), startDate, endDate, description: text(payload.description, 'شرح پروژه', { optional: true }), phases: ['برنامه‌ریزی', 'اجرا', 'آزمایش و تحویل'].map(name => ({ id: id('ph'), name, progress: 0 })), cover, clientNote: '', publicVisible: bool(payload.publicVisible), publicTitle: text(payload.publicTitle, 'عنوان عمومی', { optional: true, max: 160 }), publicSummary: text(payload.publicSummary, 'شرح عمومی', { optional: true, max: 1000 }) };
+    Object.assign(result,projectMetadata(draft,payload));
     draft.projects.push(result); audit(draft, user, action, result, 'پروژه ایجاد شد.');
   } else if (action === 'project.update') {
     manager(user);
     const project = find(draft.projects, payload.id, 'پروژه');
+    if (['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','reviewChain'].some(key=>payload[key]!==undefined)) Object.assign(project,projectMetadata(draft,payload,project));
     if (payload.customerId !== undefined) {
       const customerId = payload.customerId === null || payload.customerId === '' ? null : text(payload.customerId, 'مشتری', { max: 100 });
       if (customerId && (() => { const person = find(draft.users, customerId, 'مشتری'); return person.deletedAt || person.role !== 'customer'; })()) fail('حساب انتخابی مشتری نیست.');
@@ -249,6 +330,9 @@ export function applyAction(state, userId, action, payload = {}) {
     if (payload.publicTitle !== undefined) project.publicTitle = text(payload.publicTitle, 'عنوان عمومی', { optional: true, max: 160 });
     if (payload.publicSummary !== undefined) project.publicSummary = text(payload.publicSummary, 'شرح عمومی', { optional: true, max: 1000 });
     result = project; audit(draft, user, action, project, 'اطلاعات پروژه به‌روزرسانی شد.');
+  } else if (action === 'project.dossier.save' || action.startsWith('project.dossier.')) {
+    result = action === 'project.dossier.save' ? applyDossierAction(draft,user,action,payload) : applyDossierWorkflow(draft,user,action,payload,PROJECT_APPROVAL_LABELS);
+    audit(draft,user,action,{id:payload.projectId},'پروندهٔ گزارش تفصیلی به‌روزرسانی شد.');
   } else if (action === 'task.create' || action === 'task.update') {
     roleAllowed(user, ['manager', 'worker']);
     const project = requireProject(draft, user, payload.projectId);

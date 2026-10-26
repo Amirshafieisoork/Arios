@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHandler } from '../worker/index.mjs';
+import {PROJECT_APPROVAL_LABELS} from '../public/domain.mjs';
 import { createTestD1 } from './helpers/d1.mjs';
 
 const ORIGIN = 'https://arios.test';
@@ -108,7 +109,7 @@ async function configuredWorkspace(f) {
   const account = await f.action('account.create', { name: 'نیروی آریوس', email: workerIdentity.email, role: 'worker', projectIds: [] });
   assert.equal(account.status, 200, JSON.stringify(account.data));
   const workerId = account.data.result.id;
-  const project = await f.action('project.create', { name: 'پروژه آریوس', type: 'نظارت تصویری', location: 'تهران', customerId: null, memberIds: [workerId], budget: 10000000, contractAmount: 20000000, startDate: '2026-01-01', endDate: '2026-12-31', description: 'نصب شبکه و دوربین' });
+  const project = await f.action('project.create', { projectCode:'AR-WORKER-001',projectManagerId:session.data.user.id,reviewChain:PROJECT_APPROVAL_LABELS.map(label=>({label,userId:session.data.user.id})), name: 'پروژه آریوس', type: 'نظارت تصویری', location: 'تهران', customerId: null, memberIds: [workerId], budget: 10000000, contractAmount: 20000000, startDate: '2026-01-01', endDate: '2026-12-31', description: 'نصب شبکه و دوربین' });
   assert.equal(project.status, 200, JSON.stringify(project.data));
   const projectId = project.data.result.id;
   const rate = await f.action('worker.rate', { id: workerId, hourlyRate: 120000, effectiveDate: '2026-01-01' });

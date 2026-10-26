@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createAriosServer } from '../server.mjs';
+import {PROJECT_APPROVAL_LABELS} from '../public/domain.mjs';
 
 async function fixture(t, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'arios-api-test-'));
@@ -111,7 +112,7 @@ test('production begins empty, hashes dedicated credentials, creates scoped real
   assert.equal(response.status, 200); const manager = response.cookie;
   let state = (await call(app, '/api/state', { cookie: manager })).value;
   assert.equal(state.users.length, 1); assert.equal(state.projects.length, 0);
-  const created = await action(app, manager, 'project.create', projectPayload);
+  const created = await action(app, manager, 'project.create', {...projectPayload,projectCode:'AR-API-001',projectManagerId:state.user.id,reviewChain:PROJECT_APPROVAL_LABELS.map(label=>({label,userId:state.user.id}))});
   assert.equal(created.status, 200); const projectId = created.value.result.id;
   const account = await action(app, manager, 'account.create', { name: 'مشتری مستقل', email: 'customer@arios.example', role: 'customer', password: 'customer-unique-passphrase', projectIds: [projectId] });
   assert.equal(account.status, 200); assert.ok(!JSON.stringify(account.value).includes('customer-unique-passphrase'));

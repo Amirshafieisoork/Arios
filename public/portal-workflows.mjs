@@ -1,3 +1,4 @@
+import {currentDossierStage,dossierAwaitingMe} from './project-review-inbox.mjs';
 // Derived views use only the current user's authorized workspace snapshot.
 const rows = value => Array.isArray(value) ? value : [];
 const timestamp = value => Number.isFinite(Date.parse(value || '')) ? Date.parse(value) : 0;
@@ -5,7 +6,7 @@ const timestamp = value => Number.isFinite(Date.parse(value || '')) ? Date.parse
 export function reportProjects(state) {
   const user = state.user || {};
   if (!['manager', 'worker'].includes(user.role)) return [];
-  return rows(state.projects).filter(project => user.role === 'worker'
+  return rows(state.projects).filter(project => project.canRecordWork!==false).filter(project => user.role === 'worker'
     ? rows(project.memberIds).includes(user.id)
     : rows(project.memberIds).some(id => rows(state.users).some(person => person.id === id && person.role === 'worker' && !person.deletedAt)));
 }
@@ -22,6 +23,11 @@ export function portalNotifications(state) {
   const projects = new Set(rows(state.projects).map(project => project.id));
   const notifications = [];
   const add = item => notifications.push(item);
+  for (const project of rows(state.projects)) {
+    const submission=project.dossierSubmission, stage=currentDossierStage(project);
+    if (dossierAwaitingMe(project,user)) add({id:`dossier:${submission.id}`,kind:'dossier',title:`گزارش تفصیلی منتظر تأیید ${stage.label}`,detail:[project.projectCode,project.name].filter(Boolean).join(' · '),projectId:project.id,href:`#project/${encodeURIComponent(project.id)}/dossier`,date:submission.updatedAt||submission.submittedAt});
+    else if (['manager','accountant'].includes(user.role)&&['changes_requested','rejected'].includes(submission?.status)) add({id:`dossier-revision:${submission.id}`,kind:'dossier',title:'گزارش تفصیلی نیازمند اصلاح',detail:submission.reviewNote||project.name,projectId:project.id,href:`#project/${encodeURIComponent(project.id)}/dossier`,date:submission.updatedAt||submission.submittedAt});
+  }
   for (const report of rows(state.reports)) {
     if (!projects.has(report.projectId)) continue;
     if (manager && report.status === 'submitted') add({ id: `report:${report.id}`, kind: 'report', title: 'گزارش آمادهٔ بررسی', detail: report.description, projectId: report.projectId, href: '#reports', date: report.createdAt || report.date });

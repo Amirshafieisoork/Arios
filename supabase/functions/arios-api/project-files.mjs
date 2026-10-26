@@ -1,5 +1,5 @@
 import { APIError, rate } from './auth.mjs';
-import { projectAccess } from './domain.mjs';
+import { projectAccess, projectReadAccess, projectReviewerAccess } from './domain.mjs';
 
 const BUCKET = 'arios-project-files';
 const MAX = 10 * 1024 * 1024;
@@ -8,8 +8,20 @@ const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new APIE
 const safe = file => Object.fromEntries(['id','name','mimeType','size','uploadedBy','createdAt','clientVisible','reportId'].filter(key=>file[key]!==undefined).map(key=>[key,file[key]]));
 function authorized(state,user,projectId,write=false) {
   const actor=state.users.find(person=>person.id===user.id&&!person.deletedAt);
-  if (!actor || actor.role!==user.role || !projectAccess(state,user.id,projectId) || (write && !['manager','worker'].includes(actor.role))) fail('به فایل‌های این پروژه دسترسی ندارید.',403,'FORBIDDEN');
+  const access=write?projectAccess:projectReadAccess;
+  if (!actor || actor.role!==user.role || !access(state,user.id,projectId) || (write && !['manager','worker'].includes(actor.role))) fail('به فایل‌های این پروژه دسترسی ندارید.',403,'FORBIDDEN');
   return state.projects.find(project=>project.id===projectId);
+}
+const list=value=>Array.isArray(value)?value:[];
+function reviewerFileAccess(state,user,project,file) {
+  if(projectAccess(state,user.id,project.id))return true;
+  if(!projectReviewerAccess(state,user.id,project.id)||!file.mimeType.startsWith('image/')||(file.draftId&&!file.reportId))return false;
+  const configured=project.projectManagerId===user.id||list(project.reviewChain).some(stage=>stage.userId===user.id);
+  const reports=configured?list(state.reports).filter(report=>report.projectId===project.id):[];
+  for(const submission of [project.dossierSubmission,...list(project.dossierSubmissionHistory)]) {
+    if(list(submission?.approval?.stages).some(stage=>stage.userId===user.id))reports.push(...list(submission.snapshot?.reports));
+  }
+  return reports.some(report=>list(report.photoIds).includes(file.id));
 }
 function visible(file,user) {
   return file && file.status==='ready' && (!file.draftId || file.reportId || file.uploadedBy===user.id) && (user.role!=='customer'||file.clientVisible===true);
@@ -67,7 +79,7 @@ export async function handleProjectFiles({repo,supabase,user,request,path,readJS
   const storagePath=validPath(file,project.id);
   if(file.draftId&&!file.reportId&&!(loaded.state.reportDrafts||[]).some(draft=>draft.id===file.draftId&&draft.projectId===project.id&&draft.authorId===user.id&&!draft.reportId))fail('پیش‌نویس فایل در دسترس نیست.',403,'FORBIDDEN');
   if(path==='/api/project-files/download') {
-    if(!visible(file,user))fail('فایل در دسترس نیست.',403,'FORBIDDEN');
+    if(!visible(file,user)||!reviewerFileAccess(loaded.state,user,project,file))fail('فایل در دسترس نیست.',403,'FORBIDDEN');
     await rate(repo,`project-files-download:${user.id}`,60);
     const {data,error}=await bucket.createSignedUrl(storagePath,90,payload.preview===true&&file.mimeType.startsWith('image/')?{}:{download:file.name});
     if(error||typeof data?.signedUrl!=='string')fail('دریافت فایل انجام نشد؛ دوباره تلاش کنید.',503,'DOWNLOAD_UNAVAILABLE');

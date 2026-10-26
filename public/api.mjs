@@ -1,5 +1,5 @@
 import { STATIC_PREVIEW } from './preview-config.mjs';
-import { createSeedState, publicState, applyAction } from './domain.mjs';
+import { createSeedState, publicState, applyAction, readDossierSubmission } from './domain.mjs';
 const KEY='arios-os-isolated-preview-v1';
 let memory;
 let authMode;
@@ -14,6 +14,7 @@ export const api={isStatic:STATIC_PREVIEW,
  async demoLogin(userId){if(STATIC_PREVIEW){load();publicState(memory.state,userId);memory.userId=userId;save();return session();}return request('demo-login',{method:'POST',body:JSON.stringify({userId})});},
  async logout(){if(STATIC_PREVIEW){load();memory.userId='manager';save();return;}return request('logout',{method:'POST',body:'{}'});},
  async action(action,payload){if(STATIC_PREVIEW){const v=load(),result=applyAction(v.state,v.userId,action,payload);save();return {result,state:publicState(v.state,v.userId)};}return request('actions',{method:'POST',body:JSON.stringify({action,payload})});},
+ async dossierRead({projectId,id}){if(STATIC_PREVIEW){const v=load();return {dossierSubmission:readDossierSubmission(v.state,v.userId,projectId,id)};}return request('project-dossiers/read',{method:'POST',body:JSON.stringify({projectId,id})});},
  async assistant(payload){if(STATIC_PREVIEW)throw new Error('مدل هوش مصنوعی در نسخهٔ نمایشی متصل نیست؛ می‌توانید تیکت پشتیبانی ثبت کنید.');return request('assistant',{method:'POST',body:JSON.stringify(payload)});},
  async voice(){if(STATIC_PREVIEW)return {drafts:[],telegram:{configured:false,linked:false},integration:{aiConfigured:false,telegramConfigured:false}};return request('voice');},
  async integrations(payload){if(STATIC_PREVIEW)throw new Error('تنظیم اتصال واقعی در پیش‌نمایش نمایشی امکان‌پذیر نیست.');return request('integrations',{method:'POST',body:JSON.stringify(payload)});},

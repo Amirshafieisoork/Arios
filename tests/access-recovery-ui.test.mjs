@@ -13,8 +13,9 @@ const element=(extra={})=>({hidden:false,disabled:false,textContent:'',value:'',
 test('specialized role navigation and direct routes remain limited to their assigned workspace',()=>{
   for(const [role,page] of [['warehouse','inventory'],['accountant','finance']]){
     assert.equal(landingPage(role),page);assert.equal(loginLanding(role),page);
-    assert.deepEqual(portalNavigation(role).main.map(row=>row[0]),[page]);
-    for(const denied of ['dashboard','projects','project','team','voice','assistant','messages','support','analytics','reports'])assert.equal(allowedPortalPage(denied,role),false,`${role}:${denied}`);
+    assert.deepEqual(portalNavigation(role).main.map(row=>row[0]),role==='accountant'?[page,'reports']:[page]);
+    for(const denied of ['dashboard','projects','team','voice','assistant','messages','support','analytics'])assert.equal(allowedPortalPage(denied,role),false,`${role}:${denied}`);
+    for(const reviewPage of ['reports','project'])assert.equal(allowedPortalPage(reviewPage,role),role==='accountant',`${role}:${reviewPage}`);
     assert(allowedPortalPage('settings',role));assert(allowedPortalPage(page,role));
   }
   assert(allowedPortalPage('inventory','worker'));

@@ -4,7 +4,7 @@ import { randomBytes, randomUUID, createHash, scryptSync, timingSafeEqual } from
 import { mkdirSync, existsSync, statSync, readFileSync, realpathSync, chmodSync } from 'node:fs';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createSeedState, publicState, applyAction, DomainError } from './public/domain.mjs';
+import { createSeedState, publicState, applyAction, readDossierSubmission, DomainError } from './public/domain.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const COOKIE = 'arios_session';
@@ -100,11 +100,11 @@ export function createAriosServer(options = {}) {
   function requireOrigin(req) {
     if (req.headers.origin !== origin || req.headers['sec-fetch-site'] === 'cross-site') fail('مبدأ درخواست مجاز نیست.', 403, 'ORIGIN_DENIED');
   }
-  async function body(req) {
+  async function body(req, max = 65536) {
     if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || '')) fail('درخواست باید JSON باشد.', 415, 'UNSUPPORTED_MEDIA');
-    if (Number(req.headers['content-length']) > 65536) fail('درخواست بیش از حد بزرگ است.', 413, 'BODY_TOO_LARGE');
+    if (Number(req.headers['content-length']) > max) fail('درخواست بیش از حد بزرگ است.', 413, 'BODY_TOO_LARGE');
     const chunks = []; let length = 0;
-    for await (const chunk of req) { length += chunk.length; if (length > 65536) fail('درخواست بیش از حد بزرگ است.', 413, 'BODY_TOO_LARGE'); chunks.push(chunk); }
+    for await (const chunk of req) { length += chunk.length; if (length > max) fail('درخواست بیش از حد بزرگ است.', 413, 'BODY_TOO_LARGE'); chunks.push(chunk); }
     try { const value = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); return value; }
     catch { fail('JSON معتبر نیست.', 400, 'INVALID_JSON'); }
   }
@@ -234,6 +234,10 @@ export function createAriosServer(options = {}) {
           return json(200, { ok: true });
         }
         if (req.method === 'GET' && path === '/api/state') { const user = authorize(req); return json(200, publicState(readState(), user.id)); }
+        if (req.method === 'POST' && path === '/api/project-dossiers/read') {
+          const user = authorize(req), payload = await body(req,4096);
+          return json(200,{dossierSubmission:readDossierSubmission(readState(),user.id,payload.projectId,payload.id)});
+        }
         if (req.method === 'POST' && path === '/api/actions') {
           const user = authorize(req), payload = await body(req);
           if (typeof payload.action !== 'string' || !payload.payload || typeof payload.payload !== 'object' || Array.isArray(payload.payload)) fail('عملیات معتبر نیست.');

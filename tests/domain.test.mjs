@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSeedState, publicState, applyAction, projectAccess, DomainError } from '../public/domain.mjs';
+import { createSeedState, publicState, applyAction, projectAccess, PROJECT_APPROVAL_LABELS, DomainError } from '../public/domain.mjs';
 
 const reportPayload = overrides => ({ projectId: 'p1', workerId: 'worker', date: '2026-10-18', start: '08:00', end: '14:00', breakMinutes: 30, description: 'نصب و تست دوربین', output: 'چهار دوربین نصب شد', ...overrides });
 const materialPayload = overrides => ({ projectId: 'p1', name: 'کابل شبکه', quantity: 1.125, unit: 'متر', unitPrice: 28000, clientVisible: true, date: '2026-10-18', inventoryId: 'inv2', ...overrides });
@@ -185,7 +185,7 @@ test('only manager can manually record receipts; amount, duplicate reference and
 
 test('project creation validates customer, member roles, date order and whole money before committing', () => {
   const state = createSeedState();
-  const payload = { name: 'پروژه جدید', type: 'CCTV', location: 'تهران', customerId: 'customer', memberIds: ['worker'], budget: 10000000, contractAmount: 15000000, startDate: '2026-10-18', endDate: '2026-11-18', description: '' };
+  const payload = { projectCode:'AR-NEW-001',projectManagerId:'worker',reviewChain:PROJECT_APPROVAL_LABELS.map(label=>({label,userId:'worker'})), name: 'پروژه جدید', type: 'CCTV', location: 'تهران', customerId: 'customer', memberIds: ['worker'], budget: 10000000, contractAmount: 15000000, startDate: '2026-10-18', endDate: '2026-11-18', description: '' };
   for (const overrides of [{ customerId: 'worker' }, { memberIds: ['customer'] }, { endDate: '2026-10-17' }, { budget: 1.5 }, { contractAmount: -1 }]) unchangedOnError(state, () => applyAction(state, 'manager', 'project.create', { ...payload, ...overrides }));
   const project = applyAction(state, 'manager', 'project.create', payload);
   assert.equal(project.progress, 0);

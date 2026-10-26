@@ -4,7 +4,7 @@ export const assignableRoles = ['worker','customer','warehouse','accountant'];
 export const landingPage = role => role === 'warehouse' ? 'inventory' : role === 'accountant' ? 'finance' : 'dashboard';
 export function allowedPortalPage(page, role) {
   if (role === 'warehouse') return ['inventory','settings'].includes(page);
-  if (role === 'accountant') return ['finance','settings'].includes(page);
+  if (role === 'accountant') return ['finance','reports','project','settings'].includes(page);
   if (['team','analytics','leads','customers'].includes(page)) return role === 'manager';
   if (['calendar','documents'].includes(page)) return ['manager','worker','customer'].includes(role);
   if (['inventory','reports','voice'].includes(page)) return ['manager','worker'].includes(role);
@@ -13,7 +13,7 @@ export function allowedPortalPage(page, role) {
 }
 export function portalNavigation(role) {
   if (role === 'warehouse') return {main:[['inventory','انبار و مصرف پروژه','inventory']],links:[]};
-  if (role === 'accountant') return {main:[['finance','حسابداری و صورت‌حساب','finance']],links:[]};
+  if (role === 'accountant') return {main:[['finance','حسابداری و صورت‌حساب','finance'],['reports','گزارش تفصیلی و تأییدها','reports']],links:[]};
   return {
     main:[['dashboard',role === 'customer' ? 'نمای کلی من' : 'داشبورد','dashboard'],['projects',role === 'customer' ? 'پروژه‌های من' : 'پروژه‌ها','projects'],
       ...(role !== 'customer' ? [['reports','گزارش‌های کار','reports'],['voice','ویس و گزارش هوشمند','assistant'],['inventory',role === 'worker' ? 'مصرف و برگشت کالا' : 'تجهیزات و انبار','inventory']] : []),

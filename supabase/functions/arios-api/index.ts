@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
-import { applyAction } from './domain.mjs';
+import { applyAction, readDossierSubmission } from './domain.mjs';
 import { createRepository } from './repository.mjs';
 import { handleVoice, getConfig, capabilities } from './voice-service.mjs';
 import { APIError, authenticate, bootstrap, createAccount, activateAccount, passwordLogin, updateAccount, archiveAccount, restoreAccount, resetAccountPassword, requestPasswordReset, listPasswordResetRequests, manager, rate, safeUser } from './auth.mjs';
@@ -119,6 +119,10 @@ export function createHandler(options: any = {}) {
         return json({ user: safeUser(user), demo: false, authMode: 'supabase', capabilities: { ...capabilities(config), hosted: true, supabaseAuth: true } });
       }
       if (path === '/api/state' && request.method === 'GET') return json(await workspaceState(repo, state, user.id));
+      if (path === '/api/project-dossiers/read' && request.method === 'POST') {
+        const payload = await readJSON(request,4096);
+        return json({dossierSubmission:readDossierSubmission(state,user.id,payload.projectId,payload.id)});
+      }
       if (path === '/api/actions' && request.method === 'POST') {
         const payload = await readJSON(request);
         if (typeof payload.action !== 'string' || !payload.payload || typeof payload.payload !== 'object' || Array.isArray(payload.payload)) fail('عملیات معتبر نیست.');
