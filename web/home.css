@@ -11,16 +11,14 @@ a:focus-visible{outline:3px solid #e8c28a;outline-offset:6px}
 .portal-home{width:min(100%,1080px);min-height:100vh;min-height:100svh;margin-inline:auto;padding:34px 40px 24px;display:flex;flex-direction:column;gap:26px}
 .home-header{display:flex;justify-content:center}
 .home-brand{display:flex;align-items:center;gap:13px;color:#dbbe91;border-radius:4px}
-.brand-mark{width:47px;height:50px}
-.home-brand b{display:block;font-family:Arios,Tahoma,sans-serif;font-size:28px;line-height:1.25;letter-spacing:4px;font-weight:400}
-.home-brand small{display:block;color:#c4c9c7;font-size:11px;margin-top:6px}
+.home-logo{display:block;width:124px;height:84px;object-fit:contain}
 .home-main{flex:1;display:flex;flex-direction:column;justify-content:center;gap:34px;padding-block:16px 28px}
 .home-intro{text-align:center}
 .home-eyebrow{font-size:13px;line-height:1.9;color:#dbbe91;margin:0 0 13px}
 .home-intro h1{font-size:50px;line-height:1.55;font-weight:700;letter-spacing:0;word-spacing:.08em;margin:0}
 .home-intro h1>span{display:block}
 .home-intro h1 em{font-style:normal;color:#e2bd86}
-.home-note{font-size:14px;line-height:1.95;color:#bbc4c3;margin:14px 0 0}
+.home-note{font-size:14px;line-height:1.95;letter-spacing:0;white-space:nowrap;color:#bbc4c3;margin:0 0 12px}
 .home-note strong{color:#f8f5ed}
 .portal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
 .portal-entry{display:grid;gap:22px;min-height:304px;padding:32px;border:1px solid transparent;border-radius:20px;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
@@ -43,7 +41,7 @@ a:focus-visible{outline:3px solid #e8c28a;outline-offset:6px}
   .home-main{gap:24px;padding-block:8px 14px}
   .home-eyebrow{font-size:12px;margin-bottom:9px}
   .home-intro h1{font-size:38px}
-  .home-note{font-size:13px;margin-top:9px}
+  .home-note{font-size:12px;margin-bottom:10px}
   .portal-grid{grid-template-columns:1fr;gap:16px}
   .portal-entry{grid-template-columns:46px minmax(0,1fr);align-items:center;min-height:0;padding:23px;gap:17px 15px;border-radius:16px}
   .portal-symbol{width:46px;height:46px;border-radius:12px}
@@ -54,13 +52,11 @@ a:focus-visible{outline:3px solid #e8c28a;outline-offset:6px}
 }
 @media(max-width:380px),(max-height:700px) and (max-width:650px){
   .portal-home{padding:18px;gap:15px}
-  .brand-mark{width:38px;height:42px}
-  .home-brand b{font-size:25px}
-  .home-brand small{font-size:10px;margin-top:3px}
+  .home-logo{width:104px;height:70px}
   .home-main{gap:18px;padding-block:4px 8px}
   .home-eyebrow{font-size:11px;margin-bottom:7px}
   .home-intro h1{font-size:33px}
-  .home-note{font-size:12px;margin-top:7px}
+  .home-note{font-size:11px;margin-bottom:9px}
   .portal-grid{gap:13px}
   .portal-entry{padding:19px;gap:12px;border-radius:14px;grid-template-columns:40px minmax(0,1fr)}
   .portal-symbol{width:40px;height:40px}
@@ -72,11 +68,10 @@ a:focus-visible{outline:3px solid #e8c28a;outline-offset:6px}
 @media(max-height:600px) and (max-width:650px){
   .portal-home{padding:10px 18px;gap:10px}
   .home-main{gap:14px;padding-block:2px 5px}
-  .brand-mark{width:35px;height:38px}
-  .home-brand b{font-size:23px}
+  .home-logo{width:92px;height:60px}
   .home-eyebrow{font-size:11px;margin-bottom:5px}
   .home-intro h1{font-size:29px}
-  .home-note{font-size:11px;line-height:1.8;margin-top:6px}
+  .home-note{font-size:10px;line-height:1.8;margin-bottom:8px}
   .portal-grid{gap:10px}
   .portal-entry{padding:16px;gap:8px 10px;grid-template-columns:36px minmax(0,1fr)}
   .portal-symbol{width:36px;height:36px}

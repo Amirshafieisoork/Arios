@@ -205,3 +205,10 @@
 .auth-body--login .auth-story-bottom{color:#c1cfc1;z-index:2}
 .auth-body--login .auth-line-art{z-index:1;opacity:.35}
 .auth-body--login .auth-form-wrap>h2{letter-spacing:normal;word-spacing:.04em}
+
+/* Shared selected ARIOS logo; the wordmark is part of the image. */
+.brand .brand-logo{display:block;width:156px;height:116px;max-width:none;object-fit:contain;flex-shrink:0}
+.auth-story>.brand{flex-direction:column;align-items:flex-start;gap:2px}
+.auth-story>.brand small{margin:0;font-size:10px}
+@media(max-width:700px){.brand .brand-logo{width:112px;height:82px}.auth-story>.brand{gap:0}}
+@media(max-width:440px){.brand .brand-logo{width:96px;height:70px}}

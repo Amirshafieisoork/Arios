@@ -40,3 +40,18 @@
 
 /* Account contacts and explicit public-project publishing */
 .account-phone{display:inline-block;direction:ltr;unicode-bidi:isolate;color:var(--teal);font-variant-numeric:tabular-nums}.account-phone:hover{text-decoration:underline}.project-publication{border:1px solid var(--border);padding:18px;border-radius:12px;background:var(--surface,#fff)}.project-publication>.field{margin-top:12px}.project-publication .checkbox-label{font-weight:600;line-height:1.9}.project-publication .muted{font-size:12px;line-height:2;margin-bottom:0}
+
+/* Shared Arios identity; keep the supplied wordmark at its natural proportions. */
+.sidebar .brand{flex-direction:column;gap:9px;padding:0 0 22px;min-height:0;direction:rtl;flex-shrink:0}
+.brand>img.brand-logo{display:block;width:112px;height:94px;object-fit:contain;flex-shrink:0}
+.brand-caption{display:block;font-family:Arios,Tahoma,sans-serif;font-size:9px;line-height:1.8;letter-spacing:0;color:#b9c4ca;text-align:center}
+.login-splash .brand{flex-direction:column;align-items:center;gap:10px;direction:rtl}
+.login-splash .brand>img.brand-logo{width:150px;height:126px}
+.login-splash .brand-caption{font-size:11px}
+
+.workspace-icon img{display:block;width:24px;height:24px;object-fit:contain}
+.hero-monogram{transform:none;letter-spacing:0;text-shadow:none;line-height:0;opacity:1}
+.hero-monogram img{display:block;width:180px;height:155px;max-width:100%;object-fit:contain;filter:drop-shadow(0 0 24px #c29f6520)}
+@media(max-width:1060px){.hero-monogram img{width:155px;height:135px}}
+
+.invoice-brand-logo{display:block;width:110px;height:96px;object-fit:contain;margin-bottom:16px}
