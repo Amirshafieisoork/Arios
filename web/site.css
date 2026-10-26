@@ -212,3 +212,4 @@
 .auth-story>.brand small{margin:0;font-size:10px}
 @media(max-width:700px){.brand .brand-logo{width:112px;height:82px}.auth-story>.brand{gap:0}}
 @media(max-width:440px){.brand .brand-logo{width:96px;height:70px}}
+.brand img.brand-logo{background:#f2ecdf;border-radius:8px}

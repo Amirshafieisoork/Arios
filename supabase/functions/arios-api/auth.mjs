@@ -22,7 +22,7 @@ export function passwordValue(value) {
   return value;
 }
 export function manager(user) {
-  if (user?.role !== 'manager') fail('این عملیات فقط برای مدیر مجاز است.', 403, 'FORBIDDEN');
+  if (user?.role !== 'manager' || user.deletedAt) fail('این عملیات فقط برای مدیر مجاز است.', 403, 'FORBIDDEN');
 }
 export const sha256 = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))).map(value => value.toString(16).padStart(2, '0')).join('');
 const sameHash = (left, right) => {
@@ -137,6 +137,7 @@ function accountInState(state, actorId, payload, domainUserId) {
   if (!Array.isArray(projectIds) || projectIds.length > 100 || projectIds.some(id => typeof id !== 'string' || !id || id.length > 120) || new Set(projectIds).size !== projectIds.length) fail('فهرست پروژه‌ها معتبر نیست.');
   const projects = projectIds.map(id => state.projects.find(project => project.id === id));
   if (projects.some(project => !project)) fail('پروژه یافت نشد.', 404, 'NOT_FOUND');
+  if (projects.some(project => project.archivedAt)) fail('برای تخصیص حساب، ابتدا پروژهٔ حذف‌شده را بازیابی کنید.', 409, 'PROJECT_ARCHIVED');
   if (payload.role === 'customer' && projects.some(project => project.customerId)) fail('پروژه از قبل مشتری دارد.', 409, 'PROJECT_OWNED');
   const user = { id: domainUserId, name, ...(phone ? { phone } : {}), ...(email ? { email } : {}), ...(username ? { username } : {}), role: payload.role, ...(payload.role === 'worker' ? { hourlyRate: 0, rateHistory: [] } : {}) };
   state.users.push(user);
@@ -358,7 +359,7 @@ async function accountStatus(client, repo, actor, payload, action) {
         await repo.setSetting(`auth-security:${id}`, { blocked: true, blockUntil: Date.now() + 90000, validAfter: new Date().toISOString() });
         authSecurity = true;
       }
-      if (await repo.updateAccount({ expectedRevision: loaded.revision, state, authUserId: profile?.auth_user_id ?? null, domainUserId: result.id, role: result.role })) { changed = { result: { ...safeUser(result), loginEnabled: Boolean(profile) }, state }; break; }
+      if (await repo.updateAccount({ expectedRevision: loaded.revision, state, authUserId: profile?.auth_user_id ?? null, domainUserId: result.id, role: result.role })) { changed = { result: { ...safeUser(result), loginEnabled: Boolean(profile && !result.deletedAt) }, state }; break; }
     }
     if (!changed) fail('اطلاعات هم‌زمان تغییر کرد؛ دوباره تلاش کنید.', 409, 'STATE_CONFLICT');
     if (authSecurity) await repo.setSetting(`auth-security:${id}`, { blocked: action === 'account.archive', validAfter: new Date().toISOString() });

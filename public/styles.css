@@ -55,3 +55,4 @@
 @media(max-width:1060px){.hero-monogram img{width:155px;height:135px}}
 
 .invoice-brand-logo{display:block;width:110px;height:96px;object-fit:contain;margin-bottom:16px}
+.brand>img.brand-logo,.hero-art .hero-monogram,.workspace-label .workspace-icon{background:#f2ecdf;border-radius:8px}.workspace-icon img{display:block;object-fit:contain}

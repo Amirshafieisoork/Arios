@@ -7,7 +7,7 @@ export async function workspaceState(repo, state, userId) {
   const links = new Map((await repo.listProfileLinks()).map(profile => [profile.domain_user_id, profile]));
   snapshot.users = snapshot.users.map(person => {
     const profile = links.get(person.id);
-    return { ...person, loginEnabled: Boolean(profile), loginNeedsReview: Boolean(profile && profile.role !== person.role) };
+    return { ...person, loginEnabled: Boolean(profile && !person.deletedAt), loginNeedsReview: Boolean(profile && profile.role !== person.role) };
   });
   return snapshot;
 }

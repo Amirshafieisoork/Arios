@@ -38,7 +38,7 @@ const publicType = value => /event|مراسم|همایش|رویداد/i.test(val
 export async function publicProjects({ repo }) {
   const loaded = await repo.loadState();
   const projects = Array.isArray(loaded?.state?.projects) ? loaded.state.projects : [];
-  return { projects: projects.filter(project => project?.publicVisible === true && publicText(project.publicTitle, 160)).slice(0, 60).map(project => {
+  return { projects: projects.filter(project => !project?.archivedAt && project?.publicVisible === true && publicText(project.publicTitle, 160)).slice(0, 60).map(project => {
     const type = publicType(typeof project.type === 'string' ? project.type : '');
     return {
       id: publicText(project.id, 120), title: publicText(project.publicTitle, 160),

@@ -26,7 +26,7 @@ export function buildReminderPlans(state, links, targetDate) {
   const users = Array.isArray(state?.users) ? state.users : [], projects = Array.isArray(state?.projects) ? state.projects : [];
   const linked = new Map((Array.isArray(links) ? links : []).filter(link => /^\d{1,20}$/.test(String(link.chat_id)) && String(link.chat_id) === String(link.telegram_user_id)).map(link => [link.user_id, link]));
   return users.filter(user => user.role === 'worker' && !user.deletedAt && linked.has(user.id)).flatMap(user => {
-    const tasks = projects.filter(project => project.status !== 'completed' && (project.memberIds || []).includes(user.id)).flatMap(project => (project.tasks || []).filter(task => task.assigneeId === user.id && task.dueDate === targetDate && ['open', 'in_progress'].includes(task.status)).map(task => ({ project, task })));
+    const tasks = projects.filter(project => !project.archivedAt && project.status !== 'completed' && (project.memberIds || []).includes(user.id)).flatMap(project => (project.tasks || []).filter(task => !task.archivedAt && task.assigneeId === user.id && task.dueDate === targetDate && ['open', 'in_progress'].includes(task.status)).map(task => ({ project, task })));
     if (!tasks.length) return [];
     const label = new Intl.DateTimeFormat('fa-IR', { timeZone: ZONE, dateStyle: 'full' }).format(new Date(targetDate + 'T12:00:00Z'));
     const lines = [`${clean(user.name, 80) || 'همکار آریوس'}، برنامهٔ فردای شما`, label, ''];

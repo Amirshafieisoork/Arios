@@ -157,7 +157,7 @@ test('team shows phone call links for coworkers and customers while preserving o
   assert.match(html, /href="tel:\+989121234567"/);
   assert.match(html, /شماره تماس ثبت نشده/);
   assert(!html.includes('private-email@example.com'));
-  assert.equal((html.match(/data-edit-account=/g) || []).length, state.users.filter(user => ['worker', 'customer'].includes(user.role)).length);
+  assert.equal((html.match(/data-edit-account=/g) || []).length, state.users.filter(user => ['manager', 'worker', 'customer', 'warehouse', 'accountant'].includes(user.role) && !user.deletedAt).length);
   assert(!html.includes('data-new-profile'));
 });
 

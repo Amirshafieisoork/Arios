@@ -1,3 +1,4 @@
+import {catalogSelect} from './catalogs.mjs';
 /** Stock and project consumption. Authorization and quantities are rechecked by the API. */
 const list = value => Array.isArray(value) ? value : [];
 const stockRoles = new Set(['manager', 'warehouse']);
@@ -82,7 +83,7 @@ function openReturn(state, ctx, id) {
 }
 function openCreate(state, ctx) {
   if (!canManage(state)) return;
-  ctx.modal({ title: 'کالای جدید انبار', submitLabel: 'ثبت کالا', body: `<div class="form-grid">${field('نام کالا', input('name', 'text', '', 'required maxlength="160"', ctx), true)}${field('واحد', input('unit', 'text', 'عدد', 'required maxlength="40"', ctx))}${field('موجودی اولیه', input('quantity', 'number', 0, 'required min="0" step="0.001"', ctx))}${field('حداقل موجودی', input('minQuantity', 'number', 0, 'required min="0" step="0.001"', ctx))}${field('بهای واحد (تومان)', input('unitPrice', 'number', 0, 'required min="0" step="1"', ctx))}</div>`, onSubmit: form => ctx.mutate('inventory.create', { name: form.get('name'), unit: form.get('unit'), quantity: Number(form.get('quantity')), minQuantity: Number(form.get('minQuantity')), unitPrice: Number(form.get('unitPrice')) }) });
+  ctx.modal({ title: 'کالای جدید انبار', submitLabel: 'ثبت کالا', body: `<div class="form-grid">${field('نام کالا', input('name', 'text', '', 'required maxlength="160"', ctx), true)}${field('واحد', catalogSelect(state,'units',ctx,{name:'unit',required:true}))}${field('موجودی اولیه', input('quantity', 'number', 0, 'required min="0" step="0.001"', ctx))}${field('حداقل موجودی', input('minQuantity', 'number', 0, 'required min="0" step="0.001"', ctx))}${field('بهای واحد (تومان)', input('unitPrice', 'number', 0, 'required min="0" step="1"', ctx))}</div>`, onSubmit: form => ctx.mutate('inventory.create', { name: form.get('name'), unit: form.get('unit'), quantity: Number(form.get('quantity')), minQuantity: Number(form.get('minQuantity')), unitPrice: Number(form.get('unitPrice')) }) });
 }
 function openReceive(state, ctx, id) {
   if (!canManage(state)) return;

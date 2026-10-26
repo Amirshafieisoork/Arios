@@ -5,7 +5,7 @@ export const landingPage = role => role === 'warehouse' ? 'inventory' : role ===
 export function allowedPortalPage(page, role) {
   if (role === 'warehouse') return ['inventory','settings'].includes(page);
   if (role === 'accountant') return ['finance','reports','project','settings'].includes(page);
-  if (['team','analytics','leads','customers'].includes(page)) return role === 'manager';
+  if (['team','analytics','leads','customers','management'].includes(page)) return role === 'manager';
   if (['calendar','documents'].includes(page)) return ['manager','worker','customer'].includes(role);
   if (['inventory','reports','voice'].includes(page)) return ['manager','worker'].includes(role);
   if (page === 'finance') return ['manager','customer'].includes(role);
@@ -17,7 +17,7 @@ export function portalNavigation(role) {
   return {
     main:[['dashboard',role === 'customer' ? 'نمای کلی من' : 'داشبورد','dashboard'],['projects',role === 'customer' ? 'پروژه‌های من' : 'پروژه‌ها','projects'],
       ...(role !== 'customer' ? [['reports','گزارش‌های کار','reports'],['voice','ویس و گزارش هوشمند','assistant'],['inventory',role === 'worker' ? 'مصرف و برگشت کالا' : 'تجهیزات و انبار','inventory']] : []),
-      ...(role === 'manager' ? [['team','کاربران و دسترسی‌ها','team'],['customers','مشتریان و پیگیری فروش','team'],['leads','درخواست‌های مشاوره','support']] : []),
+      ...(role === 'manager' ? [['management','مدیریت اطلاعات','settings'],['team','کاربران و دسترسی‌ها','team'],['customers','مشتریان و پیگیری فروش','team'],['leads','درخواست‌های مشاوره','support']] : []),
       ...(['manager','customer'].includes(role) ? [['finance',role === 'customer' ? 'صورت‌حساب و پرداخت' : 'مالی و صورت‌حساب','finance']] : [])],
     links:[['calendar','تقویم و برنامه‌ریزی','calendar'],['documents','مدارک و فایل‌ها','reports'],['messages','گفت‌وگوها','messages'],['support','مرکز پشتیبانی','support'],['assistant','دستیار آریوس','assistant'],['notifications','مرکز پیگیری','bell']],
   };

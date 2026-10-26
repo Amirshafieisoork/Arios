@@ -85,3 +85,4 @@ a:focus-visible{outline:3px solid #e8c28a;outline-offset:6px}
 }
 @media(prefers-reduced-motion:reduce){.portal-entry{transition:none}.portal-entry:hover{transform:none}}
 @media(forced-colors:active){.portal-entry{border:2px solid LinkText}.portal-symbol,.portal-action{color:LinkText}}
+.home-logo{background:#f2ecdf;border-radius:6px}

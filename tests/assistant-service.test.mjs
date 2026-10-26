@@ -114,6 +114,7 @@ test('public project gallery requires explicit publication and a public title, a
   f.state.projects[1] = { ...f.state.projects[1], publicVisible: 'true', publicTitle: 'not-explicitly-published' };
   f.state.projects[2] = { ...f.state.projects[2], publicVisible: true, publicTitle: '' };
   f.state.projects[3] = { ...f.state.projects[3], publicVisible: false, publicTitle: 'hidden-project' };
+  f.state.projects.push({ ...f.state.projects[0], id: 'archived-public', publicTitle: 'archived-title', archivedAt: '2026-10-26T15:00:00Z' });
   const result = await publicProjects({ repo: f.repo });
   assert.equal(result.projects.length, 1);
   const published = result.projects[0];

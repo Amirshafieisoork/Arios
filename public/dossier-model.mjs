@@ -120,7 +120,7 @@ export function buildDossierSummary(state, projectId, {from = '', to = ''} = {})
   const reviewer = list(project.reviewChain).some(stage => stage.userId === user.id) || list(project.dossierSubmission?.approval?.stages).some(stage => stage.userId === user.id) || list(project.dossierSubmissionHistory).some(submission => list(submission.approval?.stages).some(stage => stage.userId === user.id));
   if (user.role === 'worker' && !list(project.memberIds).includes(user.id) && project.projectManagerId !== user.id && !reviewer) fail('پروژه در دسترس نیست.', 403, 'FORBIDDEN');
   const financial = ['manager', 'accountant'].includes(user.role);
-  const reports = list(state.reports).filter(report => report.projectId === project.id && matches(report.date, from, to)).map(report => {
+  const reports = list(state.reports).filter(report => !report.archivedAt && report.projectId === project.id && matches(report.date, from, to)).map(report => {
     return safeEvidenceReport(report, financial);
   }).sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start) || a.id.localeCompare(b.id));
   const days = [];
@@ -132,7 +132,7 @@ export function buildDossierSummary(state, projectId, {from = '', to = ''} = {})
     if (!day.memberIds.includes(report.workerId)) day.memberIds.push(report.workerId);
   }
   const items = new Map();
-  for (const material of list(state.materials).filter(material => material.projectId === project.id)) {
+  for (const material of list(state.materials).filter(material => !material.archivedAt && material.projectId === project.id)) {
     const returns = list(material.returns), gross = Number.isFinite(material.originalQuantity) ? material.originalQuantity : (Number(material.quantity) || 0) + returns.reduce((sum, entry) => sum + (Number(entry.quantity) || 0), 0);
     const events = [{date: material.date, quantity: gross, kind: 'consume'}].concat(returns.map(entry => ({date: entry.date, quantity: -(Number(entry.quantity) || 0), kind: 'return'}))).filter(entry => matches(entry.date, from, to));
     if (!events.length) continue;
