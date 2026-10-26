@@ -3,7 +3,7 @@ import { readFile, readdir, mkdir, rm, cp, writeFile } from 'node:fs/promises';
 import { resolve, extname } from 'node:path';
 const root=resolve(import.meta.dirname,'..');
 const dist=resolve(root,'dist');
-const types={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.ttf':'font/ttf','.png':'image/png','.webp':'image/webp','.txt':'text/plain; charset=utf-8'};
+const types={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.ttf':'font/ttf','.png':'image/png','.webp':'image/webp','.txt':'text/plain; charset=utf-8','.webmanifest':'application/manifest+json; charset=utf-8','.ico':'image/x-icon'};
 const assets={};
 async function walk(dir,prefix=''){for(const entry of await readdir(dir,{withFileTypes:true})){if(entry.name.startsWith('.')||entry.isSymbolicLink())continue;const path=resolve(dir,entry.name),name=prefix+'/'+entry.name;if(entry.isDirectory())await walk(path,name);else if(entry.isFile()){const data=await readFile(path);assets[name]={mime:types[extname(name)]||'application/octet-stream',data:data.toString('base64')};}}}
 await walk(resolve(root,'public'));

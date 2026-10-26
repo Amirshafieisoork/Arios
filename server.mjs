@@ -17,7 +17,7 @@ const textValue = (value, name, max = 200, min = 1) => { if (typeof value !== 's
 const passwordHash = (password, salt) => scryptSync(password, salt, 64).toString('hex');
 const emailValue = email => { const value = textValue(email, 'ایمیل', 254).toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) fail('ایمیل معتبر نیست.'); return value; };
 const passwordValue = password => { if (typeof password !== 'string' || password.length < 12 || password.length > 128) fail('رمز عبور باید بین ۱۲ و ۱۲۸ نویسه باشد.'); return password; };
-const mime = { '.html': 'text/html; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.zip': 'application/zip', '.ico': 'image/x-icon' };
+const mime = { '.html': 'text/html; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.zip': 'application/zip', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json; charset=utf-8' };
 
 /** Standalone, independent ARIOS service. Only ARIOS_* environment variables are read by the CLI. */
 export function createAriosServer(options = {}) {
