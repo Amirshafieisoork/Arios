@@ -1,4 +1,5 @@
 import { loginIdentity } from '../public/identity.mjs';
+import { handlePasskeys } from './passkeys.mjs';
 
 const ACCESS='arios_access',REFRESH='arios_refresh';
 const fail=(message,status=400,code='INVALID_INPUT')=>{const e=new Error(message);e.status=status;e.code=code;throw e;};
@@ -94,6 +95,7 @@ async function streamAudio({request,c,id,result,updated,fetcher,range}){
 
 export function createBff({env=process.env,fetcher=fetch}={}){return async request=>{const secure=new URL(request.url).protocol==='https:';try{const path=new URL(request.url).pathname.replace(/^\/api/,'')||'/';const audioFileId=mediaId(path);if(!['GET','POST'].includes(request.method)&&!(audioFileId&&request.method==='HEAD'))return json({error:'روش درخواست مجاز نیست.'},405);if(audioFileId&&!['GET','HEAD'].includes(request.method))return json({error:'روش درخواست مجاز نیست.'},405);const c=config(env),saved=cookies(request);if(request.method==='POST')checkOrigin(request);
  if(audioFileId&&(request.headers.get('sec-fetch-site')==='cross-site'||request.headers.has('origin')&&request.headers.get('origin')!==new URL(request.url).origin))fail('مبدأ درخواست مجاز نیست.',403,'ORIGIN_DENIED');
+ const passkeys=await handlePasskeys({path,request,c,saved,secure,fetcher,env,helpers:{json,boundedJSON,readBody,edgeRequest,authRequest,sessionCookies,clearCookies}});if(passkeys)return passkeys;
  if(path==='/login'&&request.method==='POST'){
   const body=await readBody(request);
   if(typeof body.password!=='string'||!body.password||body.password.length>128)fail('اطلاعات ورود معتبر نیست.');

@@ -1,0 +1,125 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {creationOptionsFromJSON,requestOptionsFromJSON,credentialJSON,decodeBase64URL,encodeBase64URL,loginWithPasskey,registerPasskey,mountPasskeyLogin,passkeySupport,passkeyMessage} from '../public/passkey-client.mjs';
+import {renderPasskeySettings,wirePasskeySettings,passkeyDeviceHTML} from '../public/passkey-settings.mjs';
+
+const b64=value=>Buffer.from(value).toString('base64url');
+const bytes=value=>new Uint8Array(value).buffer;
+const challenge=b64([1,2,3,4]),userID=b64([9,8,7]);
+const creation={challenge,rp:{id:'arioshub.ir',name:'آریوس'},user:{id:userID,name:'private-auth-id',displayName:'عضو'},pubKeyCredParams:[{type:'public-key',alg:-7}],excludeCredentials:[{type:'public-key',id:b64([6,5])}],authenticatorSelection:{residentKey:'preferred',userVerification:'preferred'}};
+const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}});
+const options=value=>({challenge_id:'same-native-challenge',options:value,expires_at:Math.floor(Date.now()/1000)+120});
+const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const context=()=>({e:esc,date:value=>value,api:{isStatic:false},modal:()=>{},toast:()=>{}});
+function element(extra={}){return {disabled:false,hidden:false,textContent:'',innerHTML:'',dataset:{},attributes:{},events:{},addEventListener(type,callback){this.events[type]=callback;},setAttribute(name,value){this.attributes[name]=value;},...extra};}
+function fakeScope({create,get,...extra}={}){return {isSecureContext:true,location:{hostname:'arioshub.ir'},PublicKeyCredential:class {},navigator:{credentials:{create:create||(async()=>null),get:get||(async()=>null)}},...extra};}
+function credential(type='registration'){
+  return {id:b64([10,11]),rawId:bytes([10,11]),type:'public-key',authenticatorAttachment:'platform',getClientExtensionResults:()=>({credProps:{rk:true}}),response:type==='registration'?{clientDataJSON:bytes([1,2]),attestationObject:bytes([3,4]),getTransports:()=>['internal']}:{clientDataJSON:bytes([5,6]),authenticatorData:bytes([7,8]),signature:bytes([9,10]),userHandle:bytes([9,8,7])}};
+}
+async function flush(){for(let i=0;i<15;i++)await new Promise(resolve=>setImmediate(resolve));}
+
+test('browser options decode binary values and require verified platform discoverable registration without altering native challenge',()=>{
+  const original=structuredClone(creation),scope=fakeScope();
+  const parsed=creationOptionsFromJSON(creation,scope);
+  assert.deepEqual([...new Uint8Array(parsed.challenge)],[1,2,3,4]);
+  assert.deepEqual([...new Uint8Array(parsed.user.id)],[9,8,7]);
+  assert.deepEqual([...new Uint8Array(parsed.excludeCredentials[0].id)],[6,5]);
+  assert.deepEqual(parsed.authenticatorSelection,{residentKey:'required',userVerification:'required',authenticatorAttachment:'platform'});
+  assert.deepEqual(creation,original);
+  const assertion=requestOptionsFromJSON({challenge,allowCredentials:[{id:b64([6,5]),type:'public-key'}],userVerification:'preferred'},scope);
+  assert.equal(assertion.userVerification,'required');assert.equal(encodeBase64URL(assertion.challenge),challenge);
+  assert.deepEqual([...new Uint8Array(decodeBase64URL(b64([255,0,254])))],[255,0,254]);
+  assert.equal(encodeBase64URL(new Uint8Array([9,255,1]).subarray(1,2)),b64([255]));
+});
+
+test('native browser JSON helpers are used when supported and assertion fallback includes user handle and transports',()=>{
+  const calls=[],scope=fakeScope();
+  scope.PublicKeyCredential.parseCreationOptionsFromJSON=value=>{calls.push('create');return {...value,challenge:bytes([1]),user:{...value.user,id:bytes([9])}};};
+  scope.PublicKeyCredential.parseRequestOptionsFromJSON=value=>{calls.push('get');return {...value,challenge:bytes([2])};};
+  assert.equal(creationOptionsFromJSON(creation,scope).authenticatorSelection.userVerification,'required');
+  assert.equal(requestOptionsFromJSON({challenge},scope).userVerification,'required');assert.deepEqual(calls,['create','get']);
+  const registered=credentialJSON(credential());assert.equal(registered.response.attestationObject,b64([3,4]));assert.deepEqual(registered.response.transports,['internal']);
+  const signed=credentialJSON(credential('authentication'));assert.equal(signed.response.userHandle,userID);assert.equal(signed.response.signature,b64([9,10]));
+  const native={...credential(),toJSON:()=>({id:'native-serialized',type:'public-key',response:{clientDataJSON:'AQ'}})};
+  assert.equal(credentialJSON(native).id,'native-serialized');
+});
+
+test('registration performs one explicit browser creation and sends native credential only through same-origin HttpOnly session requests',async()=>{
+  const calls=[],ceremonies=[];
+  const scope=fakeScope({create:async value=>{ceremonies.push(value);return credential();}});
+  const fetcher=async(url,init)=>{calls.push({url,init});return json(url.endsWith('/options')?options(creation):{passkey:{id:'passkey-1',friendly_name:'گوشی'}});};
+  const result=await registerPasskey({scope,fetcher});assert.equal(result.passkey.id,'passkey-1');assert.equal(ceremonies.length,1);
+  assert.deepEqual(calls.map(call=>call.url),['/api/passkeys/register/options','/api/passkeys/register/verify']);
+  assert(calls.every(call=>call.init.credentials==='same-origin'&&call.init.cache==='no-store'));
+  assert.deepEqual(JSON.parse(calls[0].init.body),{});
+  const verified=JSON.parse(calls[1].init.body);assert.deepEqual(Object.keys(verified).sort(),['challengeId','credential']);assert.equal(verified.challengeId,'same-native-challenge');
+  assert.equal(verified.credential.response.attestationObject,b64([3,4]));
+  assert(!calls.some(call=>JSON.stringify(call.init).includes('password')));
+});
+
+test('passkey login is discoverable, requires device verification and trusts only verified server account and portal',async()=>{
+  const calls=[],ceremonies=[],scope=fakeScope({get:async value=>{ceremonies.push(value);return credential('authentication');}});
+  const fetcher=async(url,init)=>{calls.push({url,init});return json(url.endsWith('/options')?options({challenge,rpId:'arioshub.ir'}):{user:{id:'verified-account',role:'accountant'},portal:'team'});};
+  const result=await loginWithPasskey({portal:'client',scope,fetcher});assert.equal(result.user.role,'accountant');assert.equal(result.portal,'team');assert.equal(ceremonies[0].publicKey.userVerification,'required');
+  assert.equal(calls.length,2);assert.deepEqual(JSON.parse(calls[0].init.body),{portal:'client'});
+  assert.deepEqual(Object.keys(JSON.parse(calls[1].init.body)).sort(),['challengeId','credential','portal']);
+  assert(!JSON.stringify(calls).includes('identifier'));assert(!JSON.stringify(calls).includes('Authorization'));
+});
+
+test('cancelled, expired and invalid ceremonies never send an authentication verification or navigate',async()=>{
+  const calls=[];
+  await assert.rejects(loginWithPasskey({scope:fakeScope({get:async()=>{throw Object.assign(new Error('private browser message'),{name:'NotAllowedError'});}}),fetcher:async(url)=>{calls.push(url);return json(options({challenge}));}}),value=>value.name==='NotAllowedError'&&!passkeyMessage(value).includes('private'));
+  assert.deepEqual(calls,['/api/passkeys/login/options']);
+  let prompted=false;
+  await assert.rejects(registerPasskey({scope:fakeScope({create:async()=>{prompted=true;}}),fetcher:async()=>json({...options(creation),expires_at:1})}),value=>value.code==='PASSKEY_CHALLENGE_MISMATCH');assert.equal(prompted,false);
+  await assert.rejects(loginWithPasskey({scope:fakeScope({get:async()=>null}),fetcher:async()=>json(options({challenge}))}),value=>value.code==='PASSKEY_CANCELLED');
+});
+
+test('unsupported or noncanonical origins leave password entry untouched and never start passkey requests',()=>{
+  const button=element(),status=element(),canonical=element(),password=element({value:'existing-password',disabled:false}),nodes={'[data-passkey-login]':button,'[data-passkey-login-status]':status,'[data-passkey-canonical]':canonical};
+  let requested=false;const scope=fakeScope({isSecureContext:false,document:{querySelector:selector=>nodes[selector]}});
+  mountPasskeyLogin({scope,fetcher:()=>{requested=true;}});assert.equal(button.disabled,true);assert.equal(requested,false);assert.match(status.textContent,/مرورگر|دستگاه/);assert.equal(password.value,'existing-password');assert.equal(password.disabled,false);
+  scope.isSecureContext=true;scope.location.hostname='arios-rouge.vercel.app';mountPasskeyLogin({scope,fetcher:()=>{requested=true;}});assert.equal(requested,false);assert.equal(canonical.hidden,false);assert.equal(passkeySupport(scope).code,'PASSKEY_WRONG_DOMAIN');
+});
+
+test('login button waits for provider readiness and sends no prompt or verify while native passkeys are disabled',async()=>{
+  const button=element(),status=element(),canonical=element(),calls=[];
+  const scope=fakeScope({document:{querySelector:selector=>({'[data-passkey-login]':button,'[data-passkey-login-status]':status,'[data-passkey-canonical]':canonical}[selector])},get:async()=>{throw Error('Must not prompt');}});
+  mountPasskeyLogin({scope,fetcher:async url=>{calls.push(url);return json({enabled:false,domainSupported:true});}});await flush();
+  assert.equal(button.disabled,true);assert.match(status.textContent,/هنوز فعال نشده/);assert.deepEqual(calls,['/api/passkeys/status']);await button.events.click();assert.equal(calls.length,1);
+});
+
+test('settings are available to each authenticated role and escape authenticator metadata',()=>{
+  const ctx=context();for(const role of ['manager','worker','customer','warehouse','accountant'])assert(renderPasskeySettings({user:{id:'own-account',role}},ctx).includes('data-passkey-register'));
+  assert.equal(renderPasskeySettings({user:null},ctx),'');
+  const html=passkeyDeviceHTML([{id:'own-key',friendly_name:'<img src=x onerror=alert(1)>',created_at:'2026-10-27T00:00:00Z'}],ctx);
+  assert(!html.includes('<img'));assert(html.includes('&lt;img'));assert(html.includes('data-passkey-remove="own-key"'));
+});
+
+test('own-key rename and deletion use confirmed modal actions and send no account identity',async()=>{
+  const enroll=element(),reload=element(),status=element(),devices=element(),rename=element({dataset:{passkeyRename:'key-1'}}),remove=element({dataset:{passkeyRemove:'key-1'}}),root=element({dataset:{passkeySettingsUser:'own-account'},isConnected:true});
+  root.querySelector=selector=>({'[data-passkey-register]':enroll,'[data-passkey-reload]':reload,'[data-passkey-settings-status]':status,'[data-passkey-devices]':devices}[selector]);
+  root.querySelectorAll=selector=>selector==='[data-passkey-rename]'?[rename]:selector==='[data-passkey-remove]'?[remove]:[];
+  const scope=fakeScope({document:{querySelector:()=>root}}),calls=[],modals=[];let keys=[{id:'key-1',friendly_name:'<device>',created_at:'2026-10-27T00:00:00Z'}];
+  const fetcher=async(url,init)=>{calls.push({url,init});if(url.endsWith('/status'))return json({enabled:true,domainSupported:true});if(url==='/api/passkeys')return json({passkeys:keys});if(url.endsWith('/rename')){keys=[{...keys[0],friendly_name:JSON.parse(init.body).name}];return json({passkey:keys[0]});}if(url.endsWith('/remove')){keys=[];return json({ok:true});}throw Error(url);};
+  const ctx={...context(),modal:value=>modals.push(value)};
+  wirePasskeySettings({user:{id:'own-account',role:'worker'}},ctx,{scope,fetcher});await flush();assert(devices.innerHTML.includes('&lt;device&gt;'));
+  await rename.events.click();assert.equal(modals.length,1);await modals[0].onSubmit({get:()=> 'گوشی من'});assert.deepEqual(JSON.parse(calls.find(call=>call.url.endsWith('/rename')).init.body),{id:'key-1',name:'گوشی من'});
+  await remove.events.click();assert.equal(modals.length,2);assert.match(modals[1].body,/رمز عبور/);assert.equal(calls.filter(call=>call.url.endsWith('/remove')).length,0);
+  await modals[1].onSubmit();assert.deepEqual(JSON.parse(calls.find(call=>call.url.endsWith('/remove')).init.body),{id:'key-1'});assert(devices.innerHTML.includes('هنوز کلید'));
+  assert(!JSON.stringify(calls).includes('own-account'));
+});
+
+test('an account switch while a list request is pending cannot paint previous-account passkey metadata',async()=>{
+  const enroll=element(),reload=element(),status=element(),devices=element(),root=element({dataset:{passkeySettingsUser:'old-account'},isConnected:true});
+  root.querySelector=selector=>({'[data-passkey-register]':enroll,'[data-passkey-reload]':reload,'[data-passkey-settings-status]':status,'[data-passkey-devices]':devices}[selector]);root.querySelectorAll=()=>[];
+  let resolveList;const pending=new Promise(resolve=>resolveList=resolve),scope=fakeScope({document:{querySelector:()=>root}});
+  wirePasskeySettings({user:{id:'old-account',role:'worker'}},context(),{scope,fetcher:async url=>url.endsWith('/status')?json({enabled:true,domainSupported:true}):pending});
+  root.dataset.passkeySettingsUser='new-account';resolveList(json({passkeys:[{id:'old-key',friendly_name:'private-old-device'}]}));await flush();assert.equal(devices.innerHTML,'');assert(!status.textContent.includes('private-old-device'));
+});
+
+test('web and portal clients remain identical, with no password storage and passkey styling before readability overrides',async()=>{
+  const [web,portal,login,index]=await Promise.all(['web/passkey-client.mjs','public/passkey-client.mjs','web/login.html','public/index.html'].map(file=>readFile(new URL('../'+file,import.meta.url),'utf8')));
+  assert.equal(web,portal);assert(!/localStorage|sessionStorage/.test(web));assert(login.includes('data-passkey-login'));assert(login.indexOf('/passkeys.css')<login.indexOf('/typography.css'));assert(index.indexOf('./passkeys.css')<index.indexOf('./typography.css'));
+});

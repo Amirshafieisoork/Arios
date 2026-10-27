@@ -1,3 +1,4 @@
+import {mountPasskeyLogin} from './passkey-client.mjs';
 import {mountPasswordRecovery} from './recovery.mjs';
 import {landingPage} from './portal-access.mjs';
 const portal=location.pathname.replace(/\/+$/,'').endsWith('/client')?'client':'team';
@@ -34,4 +35,5 @@ form.addEventListener('submit',async event=>{
  }catch(err){error.textContent=err instanceof TypeError?'ارتباط برقرار نشد. اتصال اینترنت را بررسی و دوباره امتحان کنید.':err.message||'ورود انجام نشد.';error.hidden=false;button.disabled=false;label.textContent=client?'ورود به پنل مشتریان':'ورود به فضای کار';}
 });
 
+mountPasskeyLogin({portal,onSuccess:data=>{const destination=data.portal==='client'||data.portal==='team'?data.portal:data.user.role==='customer'?'client':'team';password.value='';location.assign('/portal/?portal='+destination+'#'+landingPage(data.user.role));}});
 mountPasswordRecovery();

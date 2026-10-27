@@ -1,3 +1,4 @@
+import {renderPasskeySettings,wirePasskeySettings} from './passkey-settings.mjs';
 import {renderManagementRoleSettings,wireManagementRoleSettings} from './management-role-settings.mjs';
 import {renderPersonalStockWorkspace,renderPersonalStockTeamSummary,wirePersonalStockWorkspace} from './personal-stock-workspace.mjs';
 // Operational screens. All requests go through the shared, scoped API adapter.
@@ -161,7 +162,7 @@ function renderSettings(state, ctx) {
 export function renderOperations(page, state, ctx) {
   if (!['reports','finance','inventory','support','assistant','team','analytics','settings','notifications'].includes(page)) return null;
   if (!allowed(page,state)) return empty('این بخش برای نقش شما در دسترس نیست.', ctx);
-  return (state.user.role==='manager'&&['team','settings'].includes(page)?renderManagementRoleSettings(state,ctx):'')+({reports:renderReports,finance:renderFinance,inventory:renderInventory,support:renderSupport,assistant:renderAssistant,notifications:renderNotifications,team:renderTeam,analytics:renderAnalytics,settings:renderSettings})[page](state,ctx);
+  return (state.user.role==='manager'&&['team','settings'].includes(page)?renderManagementRoleSettings(state,ctx):'')+(page==='settings'?renderPasskeySettings(state,ctx):'')+({reports:renderReports,finance:renderFinance,inventory:renderInventory,support:renderSupport,assistant:renderAssistant,notifications:renderNotifications,team:renderTeam,analytics:renderAnalytics,settings:renderSettings})[page](state,ctx);
 }
 function bind(selector, fn) { document.querySelectorAll(selector).forEach(el => el.addEventListener('click', () => fn(el))); }
 function ticketModal(state, ctx, projectId = '', description = '', after) {
@@ -267,6 +268,7 @@ function openAccountPasswordReset(id,state,ctx){
   }});
 }
 export function wireOperations(page,state,ctx) {
+  if(page==='settings')wirePasskeySettings(state,ctx);
   if(state.user.role==='manager'&&['team','settings'].includes(page))wireManagementRoleSettings(state,ctx);
   if(!allowed(page,state)) return;
   if(page==='finance'||page==='team')wirePersonalStockWorkspace(state,ctx);
