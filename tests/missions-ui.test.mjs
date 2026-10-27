@@ -72,3 +72,9 @@ test('reminder status uses server counts and distinguishes missing scheduler fro
   assert(stale.includes('نیازمند بررسی زمان‌بند'));assert(!stale.includes('badge green'));
   const disabled=renderReminderStatus({...fresh,enabled:false},ctx,{now});assert(disabled.includes('متوقف'));assert(!disabled.includes('badge green'));
 });
+
+
+test('reminder diagnostics show missing links, no-assignment silence and the last actual Telegram acknowledgement',()=>{
+  const html=renderReminderStatus({enabled:true,configured:true,schedulerConfigured:true,lastTickAt:'2026-10-26T17:30:00Z',lastSentAt:'2026-10-26T17:30:02Z',targetDate:'2026-10-27',linkedCount:2,recipientCount:2,assignedCount:3,unlinkedAssignedCount:2,coverage:[{name:'<مدیر>',linked:true,taskCount:0},{name:'<همکار>',linked:false,taskCount:2}],summary:{},deliveries:[]},ctx,{now:Date.parse('2026-10-26T17:31:00Z')});
+  assert(html.includes('2 دریافت‌کننده'));assert(html.includes('2 همکار با مأموریت فردا هنوز به تلگرام وصل نیستند'));assert(html.includes('آخرین تأیید ارسال تلگرام'));assert(html.includes('بدون مأموریت، پیام ارسال نمی‌شود'));assert(html.includes('به همکار بدون مأموریت فردا پیامی ارسال نمی‌شود'));assert(html.includes('&lt;مدیر&gt;'));assert(!html.includes('<مدیر>'));
+});

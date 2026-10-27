@@ -325,7 +325,9 @@ export async function syncTelegram({ repo, supabase, fetcher = fetch, env = {} }
 export async function handleVoice({ path, request, supabase, repo, user, fetcher = fetch, env = {} }) {
   const paths = new Set(['/api/voice', '/api/integrations', '/api/telegram/link', '/api/telegram/unlink', '/api/telegram/sync', '/api/voice/text', '/api/voice/retry', '/api/voice/submit', '/api/voice/upload-url', '/api/voice/upload-complete', '/api/voice/audio']);
   if (!paths.has(path)) return null;
-  canVoice(user);
+  if(['/api/telegram/link','/api/telegram/unlink'].includes(path)) {
+    if(!user||user.deletedAt||!['manager','worker','warehouse','accountant'].includes(user.role))fail('اتصال تلگرام فقط برای همکار فعال مجاز است.',403,'FORBIDDEN');
+  } else canVoice(user);
   if (path === '/api/voice' && request.method === 'GET') {
     if (user.role === 'manager') await cleanupAudio(repo, supabase);
     const config = await getConfig(repo, env);
@@ -389,7 +391,8 @@ export async function handleVoice({ path, request, supabase, repo, user, fetcher
     const target = payload.userId || user.id;
     if (target !== user.id) manager(user);
     const { state } = await repo.loadState();
-    canVoice(state.users.find(user => user.id === target));
+    const person = state.users.find(user => user.id === target);
+    if (!person || person.deletedAt || !['manager','worker','warehouse','accountant'].includes(person.role)) fail('اتصال تلگرام فقط برای همکار فعال مجاز است.',403,'FORBIDDEN');
     await rate(repo, `telegram-link-target:${target}`, 3);
     const code = crypto.randomUUID().replaceAll('-', ''), expiresAt = Date.now() + 600000;
     await repo.createLinkCode({ codeHash: await digest(code), userId: target, expiresAt });

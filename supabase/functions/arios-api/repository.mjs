@@ -66,6 +66,7 @@ export function createRepository(client) {
   const commitAccount = ({ expectedRevision, state, authUserId, domainUserId, role }) => rpc('arios_account_commit', { p_expected_revision: expectedRevision, p_state: state, p_auth_user_id: authUserId, p_domain_user_id: domainUserId, p_role: role });
   const authSessionValid = (authUserId, sessionId, validAfter) => rpc('arios_auth_session_valid', { p_auth_user_id: authUserId, p_session_id: sessionId, p_valid_after: validAfter });
   const updateAccount = ({ expectedRevision, state, authUserId, domainUserId, role }) => rpc('arios_account_update', { p_expected_revision: expectedRevision, p_state: state, p_auth_user_id: authUserId, p_domain_user_id: domainUserId, p_role: role });
+  const transferPrimaryManager = ({expectedRevision,state,actorDomainUserId,targetDomainUserId,targetAuthUserId,expectedPrimaryManagerId}) => rpc('arios_primary_manager_transfer',{p_expected_revision:expectedRevision,p_state:state,p_actor_domain_user_id:actorDomainUserId,p_target_domain_user_id:targetDomainUserId,p_target_auth_user_id:targetAuthUserId,p_expected_primary_id:expectedPrimaryManagerId});
 
   const findLeadRequest = requestId => result(client.from('arios_leads').select(leadColumns).eq('request_id', requestId).maybeSingle());
   const createLead = async ({ requestId, requestHash, name, phone, message }) => {
@@ -151,7 +152,7 @@ export function createRepository(client) {
   };
   return {
     loadState, initState, mutateState, getSetting, setSetting, deleteSetting,
-    getProfile, getProfileByDomainId, listProfileLinks, createProfile, bootstrap, commitAccount, updateAccount, authSessionValid,
+    getProfile, getProfileByDomainId, listProfileLinks, createProfile, bootstrap, commitAccount, updateAccount, transferPrimaryManager, authSessionValid,
     findLeadRequest, createLead, listLeads, updateLeadStatus,
     listDrafts, getDraft, createDraft, updateDraft, claimDraft, pendingTelegramDrafts, expiredUploadDrafts, completedUploadDrafts, expiredAudioDrafts,
     listTelegramLinks, getTelegramLink, createLinkCode, consumeLinkCode, unlinkTelegram,

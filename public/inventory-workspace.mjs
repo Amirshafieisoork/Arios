@@ -1,3 +1,4 @@
+import {renderPersonalStockWorkspace,wirePersonalStockWorkspace} from './personal-stock-workspace.mjs';
 import {catalogSelect} from './catalogs.mjs';
 /** Stock and project consumption. Authorization and quantities are rechecked by the API. */
 const list = value => Array.isArray(value) ? value : [];
@@ -51,14 +52,17 @@ function materialCard(item, state, ctx) {
 
 export function renderInventoryWorkspace(state, ctx) {
   if (!inventoryRoles.has(state.user.role)) return empty('این بخش برای نقش شما در دسترس نیست', ctx);
-  const items = stock(state), archived = archivedStock(state), availableProjects = scope(state, ctx), rows = materials(state, ctx), scoped = Boolean(ctx.inventoryProjectId);
+  const scoped = Boolean(ctx.inventoryProjectId), personal = !scoped && ctx.inventoryView === 'personal';
+  const navigation = scoped ? '' : `<nav class="personal-stock-tabs" aria-label="بخش‌های انبار"><a class="button secondary ${!personal?'active':''}" href="#inventory" ${!personal?'aria-current="page"':''}>موجودی و مصرف پروژه</a><a class="button secondary ${personal?'active':''}" href="#inventory/personal" ${personal?'aria-current="page"':''}>${state.user.role==='worker'?'حساب برداشت شخصی من':'برداشت شخصی همکاران'}</a></nav>`;
+  if(personal)return `<div class="inventory-workspace">${navigation}${renderPersonalStockWorkspace(state,ctx)}</div>`;
+  const items = stock(state), archived = archivedStock(state), availableProjects = scope(state, ctx), rows = materials(state, ctx);
   const canConsume = availableProjects.length > 0 && items.some(item => Number(item.quantity) > 0);
   const consumeButton = `<button type="button" class="button primary" data-inventory-action="consume" ${canConsume ? '' : 'disabled'}>ثبت مصرف کالا</button>`;
   const heading = scoped ? `<div class="row between"><div><h2>کالاهای مصرفی پروژه</h2><p class="muted">برداشت و برگشت کالا با حفظ سوابق</p></div>${consumeButton}</div>` : `<div class="page-heading"><div><p class="eyebrow">ARIOS WORKSPACE</p><h1>${canManage(state) ? 'انبار و مصرف پروژه‌ها' : 'کالاهای مصرفی پروژه‌های من'}</h1><p class="muted">${canManage(state) ? 'ورود کالا، برداشت برای پروژه و برگشت اقلام استفاده‌نشده' : 'مصرف و برگشت کالا فقط برای پروژه‌های تخصیص‌یافتهٔ شما'}</p></div><div class="page-actions">${canManage(state) ? '<button type="button" class="button secondary" data-inventory-action="create">کالای جدید</button>' : ''}${consumeButton}</div></div>`;
   const prerequisites = !availableProjects.length ? `<div class="notice">${state.user.role === 'manager' ? 'برای ثبت مصرف، ابتدا از بخش پروژه‌ها یک پروژه بسازید' : state.user.role === 'worker' ? 'هنوز پروژه‌ای به شما تخصیص داده نشده؛ با مدیر هماهنگ کنید' : 'هنوز پروژه‌ای برای ثبت مصرف وجود ندارد؛ مدیر باید پروژه را تعریف کند'}</div>` : !items.some(item => Number(item.quantity) > 0) ? `<div class="notice">${canManage(state) ? 'برای ثبت مصرف، یک کالا تعریف و موجودی آن را وارد کنید' : 'موجودی قابل برداشت وجود ندارد؛ با انباردار هماهنگ کنید'}</div>` : '';
   const stockSection = scoped ? '' : `<section class="card"><div class="row between"><h2>موجودی انبار</h2><span class="badge">${ctx.e(ctx.n(items.length))} قلم</span></div>${items.length ? '<label class="field inventory-search"><span class="field-label">جست‌وجوی کالا</span><input type="search" data-inventory-search placeholder="نام کالا"></label>' : ''}<div class="inventory-stock-list">${items.map(item => stockCard(item, state, ctx)).join('') || empty(canManage(state) ? 'هنوز کالایی تعریف نشده؛ با «کالای جدید» نام، واحد و موجودی اولیه را ثبت کنید' : 'هنوز کالایی در انبار تعریف نشده است', ctx)}</div><p class="empty-state" data-inventory-search-empty hidden>کالایی با این نام پیدا نشد</p></section>`;
   const archivedSection = !scoped && archived.length ? `<details class="card inventory-archive"><summary>کالاهای حذف‌شده از فهرست فعال (${ctx.e(ctx.n(archived.length))})</summary><p class="muted">موجودی این اقلام صفر نشده است. برای ورود یا برداشت تازه، ابتدا کالا را به فهرست فعال بازگردانید؛ برگشت مصرف‌های قبلی همچنان قابل ثبت است.</p><div class="inventory-stock-list">${archived.map(item => archivedCard(item, ctx)).join('')}</div></details>` : '';
-  return `<div class="inventory-workspace">${heading}${prerequisites}${stockSection}${archivedSection}<section class="card"><div class="row between"><h2>سوابق مصرف و برگشت</h2>${!scoped && availableProjects.length ? `<label class="filter-label">پروژه<select data-inventory-project-filter><option value="">همهٔ پروژه‌های مجاز</option>${projectOptions(availableProjects, '', ctx)}</select></label>` : ''}</div>${rows.map(item => materialCard(item, state, ctx)).join('') || empty('هنوز مصرف کالایی برای این پروژه‌ها ثبت نشده است', ctx)}<p class="empty-state" data-inventory-project-empty hidden>مصرفی برای پروژهٔ انتخاب‌شده ثبت نشده است</p></section></div>`;
+  return `<div class="inventory-workspace">${heading}${navigation}${prerequisites}${stockSection}${archivedSection}<section class="card"><div class="row between"><h2>سوابق مصرف و برگشت</h2>${!scoped && availableProjects.length ? `<label class="filter-label">پروژه<select data-inventory-project-filter><option value="">همهٔ پروژه‌های مجاز</option>${projectOptions(availableProjects, '', ctx)}</select></label>` : ''}</div>${rows.map(item => materialCard(item, state, ctx)).join('') || empty('هنوز مصرف کالایی برای این پروژه‌ها ثبت نشده است', ctx)}<p class="empty-state" data-inventory-project-empty hidden>مصرفی برای پروژهٔ انتخاب‌شده ثبت نشده است</p></section></div>`;
 }
 
 export function openInventoryConsumption(state, ctx, projectId = ctx.inventoryProjectId, inventoryId) {
@@ -115,6 +119,7 @@ export function wireInventoryWorkspace(state, ctx) {
   installStyles();
   const document = globalThis.document;
   if (!document) return;
+  if(!ctx.inventoryProjectId)wirePersonalStockWorkspace(state,ctx);
   document.querySelectorAll('[data-inventory-action]').forEach(button => {
     if (button.inventoryBound) return; button.inventoryBound = true;
     button.addEventListener('click', () => {

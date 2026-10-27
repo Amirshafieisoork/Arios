@@ -125,7 +125,7 @@ export function applyAdminRecordAction(state, actor, action, payload, {fail, run
       if(!Number.isSafeInteger(Math.round(row.quantity*row.unitPrice)))fail('هزینهٔ مصرف از محدودهٔ مجاز بیشتر است.');
     }else if(collection==='inventory'){
       if(changes.name!==undefined)row.name=text(changes.name,'نام کالا',160);
-      if(changes.unit!==undefined){const unit=text(changes.unit,'واحد کالا',40);if(unit!==row.unit&&list(state.materials).some(material=>material.inventoryId===row.id))fail('این واحد در سوابق مصرف استفاده شده است؛ برای واحد تازه کالای جداگانه بسازید.',409,'STOCK_UNIT_IN_USE');row.unit=unit;}
+      if(changes.unit!==undefined){const unit=text(changes.unit,'واحد کالا',40);if(unit!==row.unit&&(list(state.materials).some(material=>material.inventoryId===row.id)||list(state.personalStockIssues).some(issue=>issue.inventoryId===row.id)))fail('این واحد در سوابق مصرف استفاده شده است؛ برای واحد تازه کالای جداگانه بسازید.',409,'STOCK_UNIT_IN_USE');row.unit=unit;}
       if(changes.quantity!==undefined){if(!reason)fail('برای اصلاح موجودی، دلیل شمارش یا اصلاح را ثبت کنید.');row.quantity=quantity(changes.quantity,'موجودی');}
       if(changes.minQuantity!==undefined)row.minQuantity=quantity(changes.minQuantity,'حداقل موجودی');
       if(changes.unitPrice!==undefined)row.unitPrice=money(changes.unitPrice,'بهای واحد');

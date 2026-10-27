@@ -159,9 +159,9 @@ test('archived file download is hidden normally while exact authorized approved 
   await assert.rejects(f.handle('historical-reviewer'),error=>error.status===403);
 });
 
-test('project removal after a queued nightly reminder is claimed cancels delivery before Telegram is called', async () => {
+test('project removal after a queued reminder is claimed cancels delivery instead of sending an empty personal message', async () => {
   const at=Date.parse('2026-10-26T17:30:00.000Z'),state=createSeedState();
-  state.projects[0].tasks=[{id:'next',title:'فردا',assigneeId:'worker',dueDate:tomorrow,status:'open'}];
+  state.projects[0].tasks=[{id:'next',title:'کار حذف‌شدهٔ محرمانه',assigneeId:'worker',dueDate:tomorrow,status:'open'}];
   let claimed=false,outcome;
   const repo={
     getSetting:async()=>({enabled:true}),loadState:async()=>({state:structuredClone(state)}),
@@ -170,6 +170,6 @@ test('project removal after a queued nightly reminder is claimed cancels deliver
     claimReminder:async()=>{if(claimed)return null;claimed=true;state.projects[0].archivedAt=archivedAt;return{id:'queued',user_id:'worker',chat_id:'12345'};},
     finishReminder:async value=>{outcome=value;return true;},
   };
-  const summary=await dispatchNightlyReminders({repo,config:{telegramBotToken:'test-only-token'},at,clock:()=>at,pause:async()=>{},fetcher:async()=>assert.fail('Archived project cannot trigger a Telegram message')});
+  const summary=await dispatchNightlyReminders({repo,config:{telegramBotToken:'123456:test_only_telegram_token_1234567890'},at,clock:()=>at,pause:async()=>{},fetcher:async()=>assert.fail('Archived project cannot trigger a Telegram message')});
   assert.equal(summary.cancelled,1);assert.equal(outcome.status,'cancelled');assert.equal(outcome.errorCode,'ASSIGNMENT_OR_LINK_CHANGED');
 });

@@ -20,14 +20,20 @@ export function tehranReminderWindow(at = Date.now()) {
   return { localDate, targetDate: next.toISOString().slice(0, 10), hour: Number(parts.hour), minute: Number(parts.minute), eligible: Number(parts.hour) === 21 };
 }
 
-/** Only actual assigned, open tasks and a currently linked active worker enter a message. */
-export function buildReminderPlans(state, links, targetDate) {
+const staffRoles = new Set(['manager', 'worker', 'warehouse', 'accountant']);
+function reminderCoverage(state, links, targetDate) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) throw new TypeError('Invalid target date');
   const users = Array.isArray(state?.users) ? state.users : [], projects = Array.isArray(state?.projects) ? state.projects : [];
   const linked = new Map((Array.isArray(links) ? links : []).filter(link => /^\d{1,20}$/.test(String(link.chat_id)) && String(link.chat_id) === String(link.telegram_user_id)).map(link => [link.user_id, link]));
-  return users.filter(user => user.role === 'worker' && !user.deletedAt && linked.has(user.id)).flatMap(user => {
-    const tasks = projects.filter(project => !project.archivedAt && project.status !== 'completed' && (project.memberIds || []).includes(user.id)).flatMap(project => (project.tasks || []).filter(task => !task.archivedAt && task.assigneeId === user.id && task.dueDate === targetDate && ['open', 'in_progress'].includes(task.status)).map(task => ({ project, task })));
-    if (!tasks.length) return [];
+  return users.filter(user => staffRoles.has(user.role) && !user.deletedAt).map(user => {
+    const tasks = projects.filter(project => !project.archivedAt && project.status !== 'completed' && (user.role === 'manager' || (project.memberIds || []).includes(user.id))).flatMap(project => (project.tasks || []).filter(task => !task.archivedAt && task.assigneeId === user.id && task.dueDate === targetDate && ['open', 'in_progress'].includes(task.status)).map(task => ({ project, task })));
+    return {user, tasks, link: linked.get(user.id)};
+  });
+}
+
+/** Only linked active colleagues with open assignments for tomorrow receive a personal summary. */
+export function buildReminderPlans(state, links, targetDate) {
+  return reminderCoverage(state, links, targetDate).filter(entry => entry.link && entry.tasks.length > 0).map(({user, tasks, link}) => {
     const label = new Intl.DateTimeFormat('fa-IR', { timeZone: ZONE, dateStyle: 'full' }).format(new Date(targetDate + 'T12:00:00Z'));
     const lines = [`${clean(user.name, 80) || 'همکار آریوس'}، برنامهٔ فردای شما`, label, ''];
     let included = 0;
@@ -37,8 +43,8 @@ export function buildReminderPlans(state, links, targetDate) {
       lines.push(line); included++;
     }
     if (included < tasks.length) lines.push(`و ${tasks.length - included} وظیفهٔ دیگر؛ جزئیات کامل در پنل آریوس است.`);
-    lines.push('', 'جزئیات و وضعیت کار را در پنل آریوس بررسی کنید.', 'https://arios-rouge.vercel.app/login/team');
-    return [{ userId: user.id, chatId: String(linked.get(user.id).chat_id), body: lines.join('\n'), taskCount: tasks.length }];
+    lines.push('', 'جزئیات و وضعیت کار را در پنل آریوس بررسی کنید.', 'https://arioshub.ir/login/team');
+    return { userId: user.id, chatId: String(link.chat_id), body: lines.join('\n'), taskCount: tasks.length };
   });
 }
 
@@ -148,9 +154,10 @@ export async function reminderStatus({repo, user, at = Date.now()}) {
   manager(user);
   const [loaded, links, settings, config, signingKey, rows, tick] = await Promise.all([repo.loadState(), repo.listTelegramLinks(), repo.getSetting(CONFIG_SETTING), getConfig(repo), repo.getSetting(SIGNING_KEY_SETTING), repo.listReminders({limit: 100}), repo.getSetting('telegram_reminder_last_tick')]);
   const time = tehranReminderWindow(at), state = loaded?.state || {}, plans = buildReminderPlans(state, links, time.targetDate);
-  const workers = new Set((state.users || []).filter(person => person.role === 'worker' && !person.deletedAt).map(person => person.id));
+  const coverage = reminderCoverage(state, links, time.targetDate).map(({user, tasks, link}) => ({userId: user.id, name: user.name || 'عضو تیم', role: user.role, linked: Boolean(link), taskCount: tasks.length, reason: link ? (tasks.length ? 'linked_tasks' : 'linked_no_assignment') : (tasks.length ? 'unlinked_assigned' : 'unlinked')}));
   const summary = Object.fromEntries(statuses.map(status => [status, (rows || []).filter(row => row.target_date === time.targetDate && row.status === status).length]));
-  return {enabled: settingObject(settings).enabled !== false, configured: Boolean(config.telegramBotToken), schedulerConfigured: /^[a-f0-9]{64}$/.test(signingKey || ''), time: '21:00', timezone: ZONE, targetDate: time.targetDate, linkedCount: (links || []).filter(link => workers.has(link.user_id)).length, assignedCount: plans.length, lastTickAt: typeof tick?.at === 'string' ? tick.at : null, summary, deliveries: (rows || []).map(row => ({id: row.id, userId: row.user_id, name: (state.users || []).find(person => person.id === row.user_id)?.name || 'عضو تیم', targetDate: row.target_date, status: statuses.includes(row.status) ? row.status : 'unknown', taskCount: row.task_count, attempts: row.attempts, errorCode: row.error_code || null, sentAt: row.sent_at || null, nextAttemptAt: row.next_attempt_at || null, updatedAt: row.updated_at}))};
+  const lastSentAt = (rows || []).filter(row => row.status === 'sent' && Number.isFinite(Date.parse(row.sent_at))).map(row => row.sent_at).sort((a,b) => Date.parse(b) - Date.parse(a))[0] || null;
+  return {enabled: settingObject(settings).enabled !== false, configured: Boolean(config.telegramBotToken), schedulerConfigured: /^[a-f0-9]{64}$/.test(signingKey || ''), time: '21:00', timezone: ZONE, targetDate: time.targetDate, linkedCount: coverage.filter(entry => entry.linked).length, recipientCount: plans.length, assignedCount: coverage.filter(entry => entry.taskCount > 0).length, unlinkedAssignedCount: coverage.filter(entry => !entry.linked && entry.taskCount > 0).length, coverage, lastSentAt, lastTickAt: typeof tick?.at === 'string' ? tick.at : null, summary, deliveries: (rows || []).map(row => ({id: row.id, userId: row.user_id, name: (state.users || []).find(person => person.id === row.user_id)?.name || 'عضو تیم', targetDate: row.target_date, status: statuses.includes(row.status) ? row.status : 'unknown', taskCount: row.task_count, attempts: row.attempts, errorCode: row.error_code || null, sentAt: row.sent_at || null, nextAttemptAt: row.next_attempt_at || null, updatedAt: row.updated_at}))};
 }
 
 export async function handleReminders({repo, user, request, path, fetcher = fetch, readJSON, json, env = {}, at = Date.now(), clock = Date.now, pause = wait}) {

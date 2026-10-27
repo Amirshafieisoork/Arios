@@ -3,6 +3,8 @@ import { applyDossierAction, safeDossierSubmission, safeDossierWorksheet } from 
 import { applyDossierWorkflow } from './approval-workflow.mjs';
 import { applyAdminRecordAction, managementSnapshot } from './admin-records.mjs';
 import { applyCatalogAction, readCatalogs } from './catalogs.mjs';
+import { applyPersonalStockAction, personalStockSnapshot } from './personal-stock.mjs';
+import { applyPrimaryManagerTransfer, managementRoleDetails, managementRoleSnapshot } from './management-roles.mjs';
 /** ARIOS domain. All amounts are whole toman; elapsed work is integer minutes. */
 export class DomainError extends Error {
   constructor(message, status = 400, code = 'INVALID_INPUT') {
@@ -218,9 +220,9 @@ export function publicState(state, userId) {
   for (const ticket of tickets) { contactIds.add(ticket.authorId); for (const reply of ticket.replies || []) contactIds.add(reply.authorId); }
   if (!isWarehouse && !isAccountant) for (const person of state.users) if (person.role === 'manager') contactIds.add(person.id);
   const result = {
-    user: safeUser(user, finance),
-    users: state.users.filter(person => finance || contactIds.has(person.id) || referenceIds.has(person.id)).map(person => {
-      if (person.id === user.id || isManager) return {...safeUser(person, finance),...(isManager?pick(person,['availability','workStart','workEnd']):{})};
+    user: {...safeUser(user, finance),...managementRoleDetails(state,user)},
+    users: state.users.filter(person => finance || (isWarehouse && ['manager','worker','warehouse','accountant'].includes(person.role)) || contactIds.has(person.id) || referenceIds.has(person.id)).map(person => {
+      if (person.id === user.id || isManager) return {...safeUser(person, finance),...managementRoleDetails(state,person),...(isManager?pick(person,['availability','workStart','workEnd']):{})};
       if (isWarehouse) return pick(person, ['id', 'name', 'role', 'deletedAt']);
       if (isAccountant) return pick(person, ['id', 'name', 'role', 'hourlyRate', 'rateHistory', 'deletedAt']);
       return contactIds.has(person.id) ? safeUser(person) : pick(person,['id','name','role','deletedAt','employeeCode','personnelCode']);
@@ -266,6 +268,8 @@ export function publicState(state, userId) {
     catalogs: readCatalogs(state,{includeArchived:isManager}),
   };
   if(isManager)result.management=managementSnapshot(state,user);
+  if(isManager)result.managementRoles=managementRoleSnapshot(state,user);
+  if(user.role!=='customer')result.personalStock=personalStockSnapshot(state,user);
   return result;
 }
 
@@ -318,7 +322,12 @@ export function applyAction(state, userId, action, payload = {}) {
     if(target?.archivedAt)fail('رکورد حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'RECORD_ARCHIVED');
     if(prefix==='task'&&project?.tasks?.some(task=>task.id===payload.id&&task.archivedAt))fail('وظیفه حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'RECORD_ARCHIVED');
   }
-  if (action.startsWith('admin.record.')) {
+  if(action.startsWith('personalStock.')) {
+    result=applyPersonalStockAction(draft,user,action,payload);
+    audit(draft,user,action,{id:result.id||payload.id},'حساب برداشت شخصی همکار به‌روزرسانی شد.');
+  } else if(action==='account.primary-manager.transfer') {
+    result=applyPrimaryManagerTransfer(draft,user,payload);
+  } else if (action.startsWith('admin.record.')) {
     result=applyAdminRecordAction(draft,user,action,payload,{fail,historicalRate,reportLocation,reportPhotos,run:(operation,input)=>applyAction(draft,user.id,operation,input)});
     audit(draft,user,action,{id:payload.id},`مدیریت ${payload.collection}: ${payload.reason||'اصلاح یا بازیابی رکورد'}`);
   } else if(action.startsWith('catalog.')) {
@@ -436,6 +445,8 @@ export function applyAction(state, userId, action, payload = {}) {
   } else if (action === 'account.update') {
     manager(user);
     const person = find(draft.users, text(payload.id, 'شناسه حساب', { max: 120 }), 'حساب');
+    const ownership=managementRoleSnapshot(draft,user);
+    if(person.id===ownership?.primaryManagerId && person.id!==user.id && !ownership.canTransferPrimary) fail('ویرایش حساب مدیر اصلی فقط برای خود مدیر اصلی مجاز است.',403,'PRIMARY_MANAGER_REQUIRED');
     if (person.deletedAt) fail('پیش از ویرایش، حساب حذف‌شده را بازیابی کنید.', 409, 'ACCOUNT_ARCHIVED');
     if (payload.password !== undefined && payload.password !== '') fail('تغییر رمز را جدا از ویرایش اطلاعات حساب انجام دهید.');
     if (payload.name !== undefined) person.name = text(payload.name, 'نام', { max: 120 });
@@ -691,7 +702,7 @@ export function applyAction(state, userId, action, payload = {}) {
     if (payload.confirmed !== true) fail('حذف کالا از فهرست فعال باید تأیید شود.', 400, 'CONFIRMATION_REQUIRED');
     const expected = quantity(payload.expectedQuantity, 'موجودی نمایش‌داده‌شده', true);
     if (Math.round(expected * 1000) !== Math.round(stock.quantity * 1000)) fail('موجودی این کالا تغییر کرده است؛ مقدار تازه را بررسی و دوباره تأیید کنید.', 409, 'STOCK_CHANGED');
-    const referenced = draft.materials.some(material => material.inventoryId === stock.id);
+    const referenced = draft.materials.some(material => material.inventoryId === stock.id) || (draft.personalStockIssues||[]).some(issue=>issue.inventoryId===stock.id);
     if (stock.quantity === 0 && !referenced && !stock.archivedAt) {
       draft.inventory = draft.inventory.filter(item => item.id !== stock.id);
       result = { id: stock.id, removed: true, archived: false };

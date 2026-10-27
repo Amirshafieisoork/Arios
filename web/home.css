@@ -13,10 +13,10 @@ a:focus-visible{outline:3px solid #e8c28a;outline-offset:6px}
 .home-brand{display:flex;align-items:center;gap:13px;color:#dbbe91;border-radius:4px}
 .home-logo{display:block;width:47px;height:50px;object-fit:contain;flex-shrink:0}
 .home-brand-copy b{display:block;font-size:28px;line-height:1.25;letter-spacing:4px;font-weight:400}
-.home-brand-copy small{display:block;color:#c4c9c7;font-size:11px;margin-top:6px}
+.home-brand-copy small{display:block;color:#c4c9c7;font-size:14px;margin-top:6px}
 .home-main{flex:1;display:flex;flex-direction:column;justify-content:center;gap:34px;padding-block:16px 28px}
 .home-intro{text-align:center}
-.home-eyebrow{font-size:13px;line-height:1.9;color:#dbbe91;margin:0 0 13px}
+.home-eyebrow{font-size:14px;line-height:1.9;color:#dbbe91;margin:0 0 13px}
 .home-intro h1{font-size:50px;line-height:1.55;font-weight:700;letter-spacing:0;word-spacing:.08em;margin:0}
 .home-intro h1>span{display:block}
 .home-intro h1 em{font-style:normal;color:#e2bd86}
@@ -32,51 +32,51 @@ a:focus-visible{outline:3px solid #e8c28a;outline-offset:6px}
 .portal-symbol svg{width:32px;height:32px;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
 .portal-team .portal-symbol{background:#c1a0711f;color:#e5c597}
 .portal-copy h2{font-size:34px;line-height:1.65;font-weight:700;margin:0}
-.portal-copy p{font-size:13px;line-height:1.9;color:#56676b;margin:6px 0 0}
+.portal-copy p{font-size:14px;line-height:1.9;color:#56676b;margin:6px 0 0}
 .portal-team .portal-copy p{color:#c1ccce}
 .portal-action{display:flex;justify-content:space-between;align-items:center;gap:16px;border-top:1px solid #d9d5ca;padding-top:20px;align-self:end;font-size:14px;font-weight:700;line-height:1.8}
 .portal-team .portal-action{border-color:#ffffff26;color:#edd2a9}
 .portal-action svg{width:23px;height:23px;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
-.home-footer{text-align:center;color:#9aabae;font-size:10px;letter-spacing:3px;line-height:1.6}
+.home-footer{text-align:center;color:#9aabae;font-size:14px;letter-spacing:3px;line-height:1.6}
 @media(max-width:650px){
   .portal-home{padding:24px 22px 18px;gap:20px}
   .home-main{gap:24px;padding-block:8px 14px}
-  .home-eyebrow{font-size:12px;margin-bottom:9px}
+  .home-eyebrow{font-size:14px;margin-bottom:9px}
   .home-intro h1{font-size:38px}
-  .home-note{font-size:12px;margin-bottom:10px}
+  .home-note{font-size:14px;margin-bottom:10px}
   .portal-grid{grid-template-columns:1fr;gap:16px}
   .portal-entry{grid-template-columns:46px minmax(0,1fr);align-items:center;min-height:0;padding:23px;gap:17px 15px;border-radius:16px}
   .portal-symbol{width:46px;height:46px;border-radius:12px}
   .portal-symbol svg{width:28px;height:28px}
   .portal-copy h2{font-size:27px;line-height:1.6}
-  .portal-copy p{font-size:12px;line-height:1.85;margin-top:4px}
-  .portal-action{grid-column:1/-1;padding-top:15px;font-size:13px}
+  .portal-copy p{font-size:14px;line-height:1.85;margin-top:4px}
+  .portal-action{grid-column:1/-1;padding-top:15px;font-size:14px}
 }
 @media(max-width:380px),(max-height:700px) and (max-width:650px){
   .portal-home{padding:18px;gap:15px}
   .home-logo{width:38px;height:42px}
   .home-brand-copy b{font-size:25px}
-  .home-brand-copy small{font-size:10px;margin-top:3px}
+  .home-brand-copy small{font-size:14px;margin-top:3px}
   .home-main{gap:18px;padding-block:4px 8px}
-  .home-eyebrow{font-size:11px;margin-bottom:7px}
+  .home-eyebrow{font-size:14px;margin-bottom:7px}
   .home-intro h1{font-size:33px}
-  .home-note{font-size:11px;margin-bottom:9px}
+  .home-note{font-size:14px;margin-bottom:9px}
   .portal-grid{gap:13px}
   .portal-entry{padding:19px;gap:12px;border-radius:14px;grid-template-columns:40px minmax(0,1fr)}
   .portal-symbol{width:40px;height:40px}
   .portal-symbol svg{width:25px;height:25px}
   .portal-copy h2{font-size:25px}
-  .portal-copy p{font-size:11px}
-  .portal-action{font-size:12px;padding-top:12px}
+  .portal-copy p{font-size:14px}
+  .portal-action{font-size:14px;padding-top:12px}
 }
 @media(max-height:600px) and (max-width:650px){
   .portal-home{padding:10px 18px;gap:10px}
   .home-main{gap:14px;padding-block:2px 5px}
   .home-logo{width:35px;height:38px}
   .home-brand-copy b{font-size:23px}
-  .home-eyebrow{font-size:11px;margin-bottom:5px}
+  .home-eyebrow{font-size:14px;margin-bottom:5px}
   .home-intro h1{font-size:29px}
-  .home-note{font-size:10px;line-height:1.8;margin-bottom:8px}
+  .home-note{font-size:14px;line-height:1.8;margin-bottom:8px}
   .portal-grid{gap:10px}
   .portal-entry{padding:16px;gap:8px 10px;grid-template-columns:36px minmax(0,1fr)}
   .portal-symbol{width:36px;height:36px}
@@ -85,4 +85,6 @@ a:focus-visible{outline:3px solid #e8c28a;outline-offset:6px}
 }
 @media(prefers-reduced-motion:reduce){.portal-entry{transition:none}.portal-entry:hover{transform:none}}
 @media(forced-colors:active){.portal-entry{border:2px solid LinkText}.portal-symbol,.portal-action{color:LinkText}}
-.home-logo{background:#f2ecdf;border-radius:6px}
+/* The supplied navy mark stays transparent; light follows its silhouette. */
+.home-logo{background:transparent;border-radius:0;filter:drop-shadow(0 0 1px #f3dfb394) drop-shadow(0 0 5px #dfbe7c45) drop-shadow(0 0 13px #ca9b5133)}
+@media(forced-colors:active){.home-logo{filter:none}}

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildReminderPlans, tehranReminderWindow, sendTelegramReminder, dispatchNightlyReminders, reminderStatus, handleReminders } from '../supabase/functions/arios-api/reminder-service.mjs';
 import { createHmac } from 'node:crypto';
+import {handleVoice} from '../supabase/functions/arios-api/voice-service.mjs';
 
 const AT = Date.parse('2026-10-25T17:30:00Z'); // 21:00 Tehran
 const TARGET = '2026-10-26';
@@ -42,7 +43,7 @@ test('reminder time uses Tehran day boundary, fixed21window, and correct tomorro
   assert.equal(tehranReminderWindow(Date.parse('2026-10-25T21:00:00Z')).localDate,'2026-10-26');
 });
 
-test('plans contain only active linked assigned workers and open tomorrow tasks, with bounded plaintext and no financial fields',()=>{
+test('plans cover linked active staff, omit revoked tasks and keep bounded plaintext without financial fields',()=>{
   const f=fixture(6),project=f.state.projects[0];
   f.state.users[2].deletedAt='2026-10-25';f.state.users[3].role='customer';
   f.links[3].chat_id='-10000';project.memberIds=project.memberIds.filter(id=>id!=='w4');
@@ -107,8 +108,8 @@ test('uncertain network/send acknowledgement never automatically retries or fals
   await unack.run();assert.equal(unack.calls.length,1);
 });
 
-test('archived worker, removed/completedassignment and changedTelegramlink are rechecked after claim',async()=>{
-  for(const change of [f=>{f.state.users[1].deletedAt='now';},f=>{f.state.projects[0].tasks=[];},f=>{f.state.projects[0].tasks[0].status='done';},f=>{f.state.projects[0].memberIds=[];},f=>{f.links[0].chat_id='99999';f.links[0].telegram_user_id='99999';}]){
+test('revoked accounts, tasks, project access or Telegram links cancel claimed reminders without sending empty messages',async()=>{
+  for(const change of [f=>{f.state.users[1].deletedAt='now';},f=>{f.links[0].chat_id='99999';f.links[0].telegram_user_id='99999';},f=>{f.state.projects[0].tasks=[];},f=>{f.state.projects[0].tasks[0].status='done';},f=>{f.state.projects[0].memberIds=[];},f=>{f.state.projects[0].archivedAt='now';}]){
     const f=fixture(1),claim=f.repo.claimReminder;
     f.repo.claimReminder=async args=>{const row=await claim(args);if(row)change(f);return row;};
     const result=await f.run();assert.equal(result.cancelled,1);assert.equal(f.calls.length,0);
@@ -181,4 +182,40 @@ test('accepted timestamp boundaries fit inside the unreleased replay-marker life
     const marker=leases.find(args=>args[0].startsWith('telegram-scheduler-nonce:'));assert.equal(marker[2],300000);
     const replay=await tick(f,tickRequest(headers)).then(()=>false,error=>error.code==='SCHEDULER_UNAUTHORIZED');assert.equal(replay,true);
   }
+});
+
+
+test('all staff roles can receive only their own open tomorrow assignments, while unassigned staff and customers get no message',async()=>{
+  const f=fixture(1);
+  const extras=[{id:'stock',name:'انبار',role:'warehouse'},{id:'finance',name:'مالی',role:'accountant'},{id:'client',name:'مشتری',role:'customer'},{id:'empty',name:'بدون مأموریت',role:'worker'},{id:'old',name:'قدیمی',role:'worker',deletedAt:'now'}];
+  f.state.users.push(...extras);
+  for(const [i,user]of [f.state.users[0],...extras].entries())f.links.push({user_id:user.id,chat_id:String(20000+i),telegram_user_id:String(20000+i)});
+  f.state.projects[0].memberIds.push('stock','finance','client','empty');
+  for(const id of ['manager','stock','finance','client'])f.state.projects[0].tasks.push({id:id+'-own',title:'مأموریت شخصی '+id,assigneeId:id,dueDate:TARGET,status:'open'});
+  const plans=buildReminderPlans(f.state,f.links,TARGET);assert.deepEqual(plans.map(row=>row.userId),['manager','w0','stock','finance']);
+  for(const id of ['manager','stock','finance']){const row=plans.find(row=>row.userId===id);assert.equal(row.taskCount,1);assert(row.body.includes('مأموریت شخصی '+id));assert(!row.body.includes('نصب و بررسی'));assert(row.body.includes('https://arioshub.ir/login/team'));}
+  assert.equal((await f.run()).sent,4);await f.run();assert.equal(f.calls.length,4);assert.equal(f.rows.size,4);
+  f.state.projects[0].tasks=[];const next=fixture(0);next.state.users=f.state.users;next.state.projects=f.state.projects;next.links.push(...f.links);assert.equal((await next.run()).sent,0);assert.equal(next.rows.size,0);assert.equal(next.calls.length,0);
+});
+
+test('coverage exposes missing account links and last acknowledgement without private Telegram identifiers or another member task content',async()=>{
+  const f=fixture(3);f.links.splice(1);f.links.push({user_id:'manager',chat_id:'30000',telegram_user_id:'30000'});
+  await f.run();
+  const data=await reminderStatus({repo:f.repo,user:{role:'manager'},at:AT});
+  assert.equal(data.recipientCount,1);assert.equal(data.linkedCount,2);assert.equal(data.assignedCount,3);assert.equal(data.unlinkedAssignedCount,2);assert.equal(data.lastSentAt,new Date(AT).toISOString());
+  assert.equal(data.coverage.find(row=>row.userId==='manager').reason,'linked_no_assignment');assert.equal(data.coverage.find(row=>row.userId==='w1').reason,'unlinked_assigned');
+  const serialized=JSON.stringify(data);for(const value of ['30000','10000','نصب و بررسی','chat_id','telegram_user_id',TOKEN])assert(!serialized.includes(value));
+});
+
+
+test('staff Telegram linking does not grant voice or AI privileges to warehouse or accountant roles',async()=>{
+  for(const role of ['warehouse','accountant']){
+    const user={id:role,name:role,role},state={users:[user]},codes=[];
+    const repo={rateLimit:async()=>({allowed:true}),getSetting:async()=>({telegramBotToken:TOKEN}),loadState:async()=>({state}),createLinkCode:async code=>codes.push(code)};
+    const request=new Request('https://arios.test/api/telegram/link',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const response=await handleVoice({path:'/api/telegram/link',request,repo,user,fetcher:async()=>assert.fail('Link code creation does not send Telegram messages')});
+    assert.equal(response.status,200);assert.equal(codes.length,1);assert.equal(codes[0].userId,role);
+    await assert.rejects(handleVoice({path:'/api/voice/text',request:new Request('https://arios.test/api/voice/text',{method:'POST',body:'{}'}),repo,user}),error=>error.status===403);
+  }
+  await assert.rejects(handleVoice({path:'/api/telegram/link',request:new Request('https://arios.test/api/telegram/link',{method:'POST',body:'{}'}),repo:{},user:{id:'client',role:'customer'}}),error=>error.status===403);
 });

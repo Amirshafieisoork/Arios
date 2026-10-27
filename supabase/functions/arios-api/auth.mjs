@@ -1,5 +1,6 @@
 import { applyAction } from './domain.mjs';
 import { normalizePhone, normalizeUsername, loginIdentity, phoneAuthEmail, internalAuthEmail } from './identity.mjs';
+import { applyPrimaryManagerTransfer, primaryTransferCompleted, managementRoleDetails } from './management-roles.mjs';
 /** Authentication is resolved from Supabase Auth and private profiles only. */
 export class APIError extends Error {
   constructor(message, status = 400, code = 'INVALID_INPUT') {
@@ -7,7 +8,7 @@ export class APIError extends Error {
   }
 }
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
-export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'deletedAt'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
+export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'deletedAt', 'managementRole', 'managementTitle'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
 export function text(value, label, max = 4000) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) fail(`${label} معتبر نیست.`);
   return value.trim();
@@ -52,7 +53,7 @@ export async function authenticate(request, client, repo) {
   const user = loaded.state.users.find(user => user.id === profile.domain_user_id);
   if (!user || user.deletedAt || user.role !== profile.role) fail('دسترسی حساب نیازمند بررسی مدیر است.', 403, 'PROFILE_MISMATCH');
   await verifySessionSecurity(repo, user.id, response.data.user.id, match[1]);
-  return { user, authUser: response.data.user, state: loaded.state, revision: loaded.revision };
+  return { user: {...user,...managementRoleDetails(loaded.state,user)}, authUser: response.data.user, state: loaded.state, revision: loaded.revision };
 }
 
 export function emptyState(email) {
@@ -200,6 +201,52 @@ export async function updateAccount(client, repo, actor, payload) {
     if (await repo.updateAccount({ expectedRevision: loaded.revision, state, authUserId: profile?.auth_user_id ?? null, domainUserId: result.id, role: result.role })) return { result: { ...safeUser(result), warnings: result.warnings || [], loginEnabled: Boolean(profile) }, state };
   }
   fail('اطلاعات هم‌زمان تغییر کرد؛ دوباره تلاش کنید.', 409, 'STATE_CONFLICT');
+}
+
+/** Ownership and the promoted login profile change in one CAS-protected database transaction. */
+export async function transferPrimaryManager(client,repo,actor,payload) {
+  manager(actor);
+  await rate(repo,`primary-manager-transfer:${actor.id}`,6);
+  const id=text(payload?.id,'شناسه حساب',120);
+  payload={...payload,id};
+  // Archive, activation and password reset use this same durable lock. A target
+  // must not be blocked or reset in the gap between identity validation and promotion.
+  return withPrivateLock(repo,`account-security:${id}`,async()=>{
+    for(let attempt=0;attempt<5;attempt++) {
+      const loaded=await repo.loadState();
+      if(!loaded)fail('فضای کار آماده نیست.',503,'STATE_NOT_INITIALIZED');
+      const state=structuredClone(loaded.state);
+      const result=applyPrimaryManagerTransfer(state,actor.id,payload);
+      const target=loaded.state.users.find(user=>user.id===payload.id);
+      const profile=await repo.getProfileByDomainId(payload.id);
+      if(!profile||profile.domain_user_id!==payload.id||profile.role!==target?.role)fail('ابتدا ورود این همکار را فعال و هماهنگ کنید؛ مدیر اصلی باید حساب ورود فعال داشته باشد.',409,'PRIMARY_MANAGER_LOGIN_REQUIRED');
+      const security=await repo.getSetting?.(`auth-security:${payload.id}`);
+      if(security?.blocked&&(!security.blockUntil||security.blockUntil>Date.now()))fail('حساب انتخابی مسدود است؛ ابتدا دسترسی آن را بازیابی کنید.',409,'PRIMARY_MANAGER_LOGIN_REQUIRED');
+      let identity;
+      try {identity=await client.auth.admin.getUserById(profile.auth_user_id);}
+      catch {fail('بررسی حساب ورود انجام نشد؛ دوباره تلاش کنید.',503,'AUTH_UNAVAILABLE');}
+      const authUser=identity?.data?.user;
+      if(identity?.error||authUser?.id!==profile.auth_user_id||authUser.deleted_at||Date.parse(authUser.banned_until||'')>Date.now())fail('حساب ورود این همکار فعال نیست؛ ابتدا آن را بررسی کنید.',409,'PRIMARY_MANAGER_LOGIN_REQUIRED');
+      if(result.replayed)return {result,state:loaded.state};
+      let committed;
+      try {
+        committed=await repo.transferPrimaryManager({expectedRevision:loaded.revision,state,actorDomainUserId:actor.id,targetDomainUserId:target.id,targetAuthUserId:profile.auth_user_id,expectedPrimaryManagerId:payload.expectedPrimaryManagerId});
+      }catch(error) {
+        // An uncertain commit must never trigger a second promotion or undo a completed transfer.
+        let current;
+        try {current=await repo.loadState();}
+        catch {fail('نتیجهٔ تعیین مدیر اصلی هنوز قطعی نیست؛ همین درخواست را دوباره بررسی کنید.',503,'PRIMARY_MANAGER_TRANSFER_PENDING');}
+        if(primaryTransferCompleted(current?.state,actor.id,payload)) {
+          const confirmed=await repo.getProfileByDomainId(payload.id);
+          if(confirmed?.auth_user_id===profile.auth_user_id&&confirmed.role==='manager')return {result:{...result,replayed:true},state:current.state};
+        }
+        throw error;
+      }
+      if(committed===true)return {result,state};
+      if(committed!==false)fail('نتیجهٔ تعیین مدیر اصلی هنوز قطعی نیست؛ همین درخواست را دوباره بررسی کنید.',503,'PRIMARY_MANAGER_TRANSFER_PENDING');
+    }
+    fail('اطلاعات هم‌زمان تغییر کرد؛ دوباره تلاش کنید.',409,'STATE_CONFLICT');
+  });
 }
 
 async function authResponseJSON(response) {

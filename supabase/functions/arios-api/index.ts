@@ -2,7 +2,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
 import { applyAction, readDossierSubmission } from './domain.mjs';
 import { createRepository } from './repository.mjs';
 import { handleVoice, getConfig, capabilities } from './voice-service.mjs';
-import { APIError, authenticate, bootstrap, createAccount, activateAccount, passwordLogin, updateAccount, archiveAccount, restoreAccount, resetAccountPassword, requestPasswordReset, listPasswordResetRequests, manager, rate, safeUser } from './auth.mjs';
+import { APIError, authenticate, bootstrap, createAccount, activateAccount, transferPrimaryManager, passwordLogin, updateAccount, archiveAccount, restoreAccount, resetAccountPassword, requestPasswordReset, listPasswordResetRequests, manager, rate, safeUser } from './auth.mjs';
 import { testAIConnection } from './voice-core.mjs';
 import { publicAssistant, publicProjects, workspaceAssistant } from './assistant-service.mjs';
 import { workspaceState } from './account-state.mjs';
@@ -126,7 +126,9 @@ export function createHandler(options: any = {}) {
       if (path === '/api/actions' && request.method === 'POST') {
         const payload = await readJSON(request);
         if (typeof payload.action !== 'string' || !payload.payload || typeof payload.payload !== 'object' || Array.isArray(payload.payload)) fail('عملیات معتبر نیست.');
-        const result = payload.action === 'account.create'
+        const result = payload.action === 'account.primary-manager.transfer'
+          ? await transferPrimaryManager(client,repo,user,payload.payload)
+          : payload.action === 'account.create'
           ? await createAccount(client, repo, user, payload.payload)
           : payload.action === 'account.update'
             ? await updateAccount(client, repo, user, payload.payload)

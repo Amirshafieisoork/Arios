@@ -1,0 +1,157 @@
+/* Readable Persian screen type. Print documents keep their own point-based layout. */
+@media screen {
+  html{font-size:16px;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+  body{font-size:1rem;line-height:1.8}
+  button,input,select,textarea{font-size:1rem;line-height:1.65}
+  input,select,textarea{min-width:0;max-width:100%}
+  small{font-size:.875rem;line-height:1.8}
+  h1,h2,h3,h4{line-height:1.65;overflow-wrap:anywhere}
+  p,li,dd,td,label{overflow-wrap:anywhere}
+  .muted,.notice,.alert,.form-error,.auth-error,.auth-success{line-height:1.9}
+  .field-label,.field>span,.auth-field>span{line-height:1.8}
+  .field input,.field select,.field textarea,.auth-field input,.auth-field select,.auth-field textarea{font-size:1rem;min-height:46px}
+  .button{font-size:1rem;min-height:44px;line-height:1.65;white-space:normal;text-align:center}
+  .button.small{font-size:1rem;min-height:40px}
+  .icon-btn{width:44px;height:44px;min-width:44px;min-height:44px;flex-shrink:0}
+  .badge{font-size:.875rem;line-height:1.7;max-width:100%;white-space:normal}
+  .tab,.management-tab{font-size:1rem;line-height:1.7;min-height:44px}
+  .insight-schedule-button.text-link{font-size:1rem;min-height:44px;line-height:1.7}
+  .nav-link{line-height:1.8;white-space:normal}
+  .sidebar .nav-link{font-size:.9375rem;min-height:48px}
+  .sidebar nav>.nav-group,.workspace-label strong,.workspace-label small,.sidebar-user small,.brand-caption{font-size:.875rem;line-height:1.8}
+  .sidebar .nav-link>.nav-count{min-width:24px;min-height:24px;line-height:1.5}
+  .topbar{height:auto;min-height:76px;flex-wrap:wrap;padding-block:14px;gap:14px}
+  .topbar-title{min-width:0;flex:1}
+  .breadcrumb{font-size:.875rem;line-height:1.75;white-space:normal;overflow-wrap:anywhere}
+  .topbar-tools{flex-wrap:wrap;min-width:0}
+  .topbar-tools .management-global-link{font-size:.875rem!important;max-width:none;line-height:1.7}
+  .topbar .searchbox{min-width:0}
+  .topbar .searchbox input{min-width:0}
+  .page-head,.page-heading,.card-head,.toolbar,.row.between{flex-wrap:wrap}
+  .page-head>div,.page-heading>div,.card-head>div,.toolbar>div,.row.between>div{min-width:0}
+  .page-title,.page-heading h1{font-size:clamp(1.625rem,2.2vw,2rem)}
+  .page-subtitle,.page-heading>div>p.muted{font-size:1rem;line-height:1.9;max-width:100%}
+  .card-title,.card-head h2{font-size:1.25rem}
+  .card-head .actions,.page-actions,.actions{flex-wrap:wrap;gap:10px}
+  .table-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{font-size:.9375rem}
+  th,td{line-height:1.8}
+  .stat-label,.stat-note,.stat-change,.legend,.legend-item>span,.bar-group>span,.bar-chart .bar-group>span,.insight-month-labels,.insight-bar-group small{font-size:.875rem;line-height:1.75}
+  .stat-value{line-height:1.65;overflow-wrap:anywhere}
+  .stat-card{min-height:148px}
+  .hero-description,.hero-copy p,.customer-hero p,.voice-hero p{font-size:1rem;line-height:1.95}
+  .project-card-title,.project-body h3{font-size:1.125rem;line-height:1.8}
+  .project-body,.project-foot{min-width:0}
+  .project-body p,.project-foot small{line-height:1.8}
+  .project-task-row,.management-record,.inventory-stock-item>.row{min-width:0}
+  .project-task-row>div,.management-record-main,.inventory-stock-item>.row>div{min-width:0}
+  .project-task-row .field{min-width:0}
+  .modal{width:min(760px,100%);max-height:calc(100dvh - 32px)}
+  .modal-body{line-height:1.85}
+  .modal-head h2{font-size:1.375rem;line-height:1.7}
+  .modal-foot{flex-wrap:wrap;gap:10px}
+  .modal-foot .button{flex:1;min-width:120px}
+  .persian-calendar-week{font-size:.875rem}
+  .persian-calendar-days button{font-size:1rem;min-height:40px}
+  .persian-calendar-foot button{font-size:.875rem;min-height:44px}
+  .dossier-table{font-size:.9375rem}
+  .dossier-identification dt,.dossier-finance-totals dt,.dossier-footnote,.dossier-stage small,.dossier-stage time{font-size:.875rem;line-height:1.9}
+  .dossier-identification dd,.dossier-work-entry p,.dossier-total{font-size:1rem}
+  .management-record h3{font-size:1.125rem}
+  .management-record p,.management-shortcuts,.management-toolbar p{font-size:.9375rem}
+  .management-global-link{font-size:.875rem!important;line-height:1.7}
+  .home-brand-copy small,.home-eyebrow,.home-footer{font-size:.875rem;line-height:1.8}
+  .portal-copy p{font-size:1rem;line-height:1.85}
+  .portal-action{font-size:1rem;line-height:1.8}
+  .home-note{font-size:1rem;line-height:1.9}
+  .home-brand{flex-shrink:0}
+  .home-footer{letter-spacing:2px}
+  .home-note{letter-spacing:normal}
+  .auth-form-description,.auth-field,.auth-back,.auth-switch,.auth-help p{font-size:1rem;line-height:1.9}
+  .auth-portal-tag,.auth-story-bottom,.auth-panel-foot,.auth-story>.brand small{font-size:.875rem;line-height:1.8}
+  .auth-story-copy>p:not(.eyebrow){font-size:1rem;line-height:1.95}
+  .auth-story-copy>span{font-size:.9375rem;line-height:1.8}
+  .auth-form-wrap>h2{font-size:clamp(1.625rem,2.2vw,2rem);line-height:1.7}
+}
+@media screen and (max-width:850px){
+  .content{padding-inline:20px}
+  .topbar{padding-inline:20px}
+  .project-task-row{flex-wrap:wrap}
+  .project-task-row>div{flex-basis:100%}
+  .toolbar select{max-width:100%;min-width:0}
+}
+@media screen and (max-width:650px){
+  .portal-home{gap:22px;padding:24px 18px}
+  .home-main{gap:24px;padding-block:6px 16px}
+  .home-intro h1{font-size:clamp(2rem,7.5vw,2.5rem);line-height:1.6}
+  .home-eyebrow{margin-bottom:10px}
+  .portal-entry{padding:22px 18px;gap:16px 12px;grid-template-columns:42px minmax(0,1fr)}
+  .portal-symbol{width:42px;height:42px}
+  .portal-copy h2{font-size:clamp(1.5rem,6vw,1.875rem);line-height:1.7}
+  .portal-action{padding-top:16px}
+  .home-note{white-space:normal;max-width:32rem;margin-inline:auto}
+  .home-footer{font-size:.875rem}
+  .home-brand-copy small{margin-top:3px}
+  .auth-shell{min-width:0}
+  .auth-form-wrap{max-width:100%}
+  .auth-help{align-items:flex-start}
+  .grid.metrics,.grid.four{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .metric>small,.stat-value small{font-size:.875rem}
+  .row.between{gap:12px}
+  .card-head .actions{width:100%}
+  .card-head .actions>.button{flex:1}
+  .project-task-row .field{width:100%}
+  .dossier-stage-list,.project-review-chain>ol{grid-template-columns:minmax(0,1fr)}
+  .hub-calendar-head{flex-wrap:wrap}
+  .hub-calendar-head>.button{width:100%}
+  .hub-calendar-week,.hub-calendar-grid{gap:3px}
+  .hub-calendar-week>span{font-size:.875rem;padding-inline:0}
+  .hub-calendar-grid>button{min-width:0;min-height:74px;padding:6px 2px}
+  .hub-calendar-grid>button>span:first-child{font-size:1rem}
+  .hub-calendar-grid>button>small{font-size:.875rem;line-height:1.7}
+  .management-filterbar>.tabs{gap:12px}
+  .management-record-actions .button{min-width:110px}
+}
+@media screen and (max-width:480px){
+  .content{padding:20px 14px 14px}
+  .topbar{padding-inline:14px;gap:12px;align-items:flex-start}
+  .topbar-title{flex-basis:100%;min-height:44px}
+  .topbar-tools{width:100%;justify-content:flex-start;gap:10px}
+  .topbar-tools .profile-button{margin-inline-start:auto}
+  .topbar-tools .management-global-link{max-width:none;padding:9px 12px!important}
+  .topbar .demo-switch select{font-size:1rem;max-width:100%}
+  .topbar .demo-switch{min-width:0;flex:1}
+  .page-head,.page-heading{gap:14px}
+  .page-head .actions,.page-actions{width:100%}
+  .page-head .actions>.button,.page-actions>.button{flex:1;min-width:120px;min-height:44px;font-size:1rem}
+  .button.small{min-height:44px}
+  .hero{padding:26px 20px;min-height:290px}
+  .hero-title{font-size:1.625rem;line-height:1.75;max-width:100%}
+  .hero-description{max-width:100%}
+  .hero-copy{position:relative;z-index:2}
+  .hero-art{opacity:.16;pointer-events:none}
+  .stat-card{padding:16px 12px;min-height:170px}
+  .stat-value,.stat-value .money{font-size:1.5rem;line-height:1.7}
+  .stat-value .money small{display:block}
+  .stat-label{margin-bottom:8px}
+  .grid.metrics,.grid.four{gap:12px}
+  .metric>strong{font-size:1.5rem}
+  .metric{min-width:0}
+  .modal-overlay{padding:10px}
+  .modal{max-height:calc(100dvh - 20px);border-radius:14px}
+  .modal-head,.modal-body,.modal-foot{padding-inline:16px}
+  .modal-head{gap:12px;align-items:flex-start}
+  .modal-head h2{font-size:1.25rem}
+  .modal .form-grid{grid-template-columns:minmax(0,1fr)}
+  .modal-foot .button{min-width:100px}
+  .tabs{flex-wrap:wrap;gap:6px}
+  .tab{padding:10px 12px}
+  .table-wrap td,.table-wrap th{padding:12px}
+  .dossier-identification,.project-identification{grid-template-columns:minmax(0,1fr)}
+  .auth-form-panel{padding-inline:20px}
+  .auth-story-copy h1{font-size:1.875rem}
+  .auth-form-wrap>h2{font-size:1.75rem}
+  .auth-help p{line-height:1.9}
+  .management-phase{grid-template-columns:minmax(0,1fr)}
+  .management-phase input{width:100%}
+}
