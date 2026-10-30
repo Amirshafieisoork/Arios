@@ -1,4 +1,5 @@
 import { applyAction } from './domain.mjs';
+import { applyPersonProfile } from './people-profile.mjs';
 import { normalizePhone, normalizeUsername, loginIdentity, phoneAuthEmail, internalAuthEmail } from './identity.mjs';
 import { applyPrimaryManagerTransfer, primaryTransferCompleted, managementRoleDetails } from './management-roles.mjs';
 /** Authentication is resolved from Supabase Auth and private profiles only. */
@@ -141,6 +142,10 @@ function accountInState(state, actorId, payload, domainUserId) {
   if (projects.some(project => project.archivedAt)) fail('برای تخصیص حساب، ابتدا پروژهٔ حذف‌شده را بازیابی کنید.', 409, 'PROJECT_ARCHIVED');
   if (payload.role === 'customer' && projects.some(project => project.customerId)) fail('پروژه از قبل مشتری دارد.', 409, 'PROJECT_OWNED');
   const user = { id: domainUserId, name, ...(phone ? { phone } : {}), ...(email ? { email } : {}), ...(username ? { username } : {}), role: payload.role, ...(payload.role === 'worker' ? { hourlyRate: 0, rateHistory: [] } : {}) };
+  for (const [key,label,max] of [['department','واحد',100],['skill','تخصص',200]]) {
+    if(payload[key]!==undefined){if(typeof payload[key]!=='string'||payload[key].trim().length>max)fail(`${label} معتبر نیست.`);user[key]=payload[key].trim();}
+  }
+  applyPersonProfile(user,payload);
   state.users.push(user);
   for (const project of projects) {
     if (user.role === 'customer') project.customerId = user.id;

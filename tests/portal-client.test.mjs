@@ -109,7 +109,7 @@ test('Supabase accounts use phone and a simple initial password while legacy Cha
   data.append('projectIds', 'p1');
   await modal.onSubmit(data);
   assert.equal(mutation.action, 'account.create');
-  assert.deepEqual(mutation.payload, { name: 'عضو تازه', phone: '۰۹۱۲۱۲۳۴۵۶۷', role: 'worker', username: '', password: '123456', projectIds: ['p1'] });
+  assert.deepEqual(mutation.payload, { name: 'عضو تازه', phone: '۰۹۱۲۱۲۳۴۵۶۷', role: 'worker', username: '', password: '123456', projectIds: ['p1'], department: '', skill: '' });
   ctx.authMode = 'chatgpt';
   ctx.capabilities.supabaseAuth = false;
   wireOperations('team', state, ctx);

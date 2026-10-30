@@ -58,6 +58,10 @@ export async function handlePasskeys({path,request,c,saved,secure,fetcher,env,he
     if(!response.ok){
       const code=typeof data?.error_code==='string'?data.error_code:typeof data?.code==='string'?data.code:'',message=String(data?.msg||data?.message||data?.error_description||'');
       if(code==='passkey_disabled'||/passkeys? (?:are |is )?disabled|passkey.*not enabled/i.test(message))error('ورود با اثر انگشت هنوز در سرویس ورود فعال نشده است.',503,'PASSKEY_NOT_CONFIGURED');
+      if(['webauthn_challenge_not_found','webauthn_challenge_expired'].includes(code))error('مهلت تأیید تمام شده است؛ دوباره تلاش کنید.',400,'PASSKEY_CHALLENGE_MISMATCH');
+      if(code==='webauthn_credential_exists')error('این دستگاه قبلاً برای حساب ثبت شده است.',409,'PASSKEY_ALREADY_REGISTERED');
+      if(code==='too_many_passkeys')error('تعداد کلیدهای ورود حساب کامل است؛ یک کلید قدیمی را حذف کنید.',409,'PASSKEY_LIMIT_REACHED');
+      if(['email_not_confirmed','phone_not_confirmed','user_banned'].includes(code))error('حساب شما برای این روش ورود آماده نیست؛ با مدیر هماهنگ کنید.',403,'PASSKEY_ACCOUNT_UNAVAILABLE');
       if(response.status===429)error('تعداد تلاش‌ها زیاد است؛ کمی بعد دوباره تلاش کنید.',429,'RATE_LIMITED');
       if(code==='insufficient_aal')error('برای مدیریت ورود امن، دوباره وارد حساب شوید و تأیید دومرحله‌ای را کامل کنید.',403,'PASSKEY_REAUTH_REQUIRED');
       if(response.status>=500)error('سرویس ورود موقتاً در دسترس نیست.',503,'AUTH_UNAVAILABLE');

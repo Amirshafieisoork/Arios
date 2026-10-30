@@ -4,6 +4,8 @@ import { applyDossierWorkflow } from './approval-workflow.mjs';
 import { applyAdminRecordAction, managementSnapshot } from './admin-records.mjs';
 import { applyCatalogAction, readCatalogs } from './catalogs.mjs';
 import { applyPersonalStockAction, personalStockSnapshot } from './personal-stock.mjs';
+import { applyFinanceAction, employeeFinanceSnapshot } from './finance-ledger.mjs';
+import { applyPersonProfile } from './people-profile.mjs';
 import { applyPrimaryManagerTransfer, managementRoleDetails, managementRoleSnapshot } from './management-roles.mjs';
 /** ARIOS domain. All amounts are whole toman; elapsed work is integer minutes. */
 export class DomainError extends Error {
@@ -269,7 +271,7 @@ export function publicState(state, userId) {
   };
   if(isManager)result.management=managementSnapshot(state,user);
   if(isManager)result.managementRoles=managementRoleSnapshot(state,user);
-  if(user.role!=='customer')result.personalStock=personalStockSnapshot(state,user);
+  if(user.role!=='customer'){result.personalStock=personalStockSnapshot(state,user);result.employeeFinance=employeeFinanceSnapshot(state,user);}
   return result;
 }
 
@@ -317,12 +319,15 @@ export function applyAction(state, userId, action, payload = {}) {
     const sourceDraft=action.startsWith('report.draft.')&&payload.id?(draft.reportDrafts||[]).find(row=>row.id===payload.id):null;
     // Check canonical parents as well as requested destinations. Irrelevant client IDs must never mask an archived origin.
     const projectIds=new Set([payload.projectId,target?.projectId,sourceDraft?.projectId,...(prefix==='project'?[payload.id]:[])].filter(Boolean));
-    if(draft.projects.some(row=>projectIds.has(row.id)&&row.archivedAt))fail('پروژه حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'PROJECT_ARCHIVED');
+    if(!['finance.petty.expense','finance.petty.return'].includes(action)&&draft.projects.some(row=>projectIds.has(row.id)&&row.archivedAt))fail('پروژه حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'PROJECT_ARCHIVED');
     const project=draft.projects.find(row=>row.id===payload.projectId);
     if(target?.archivedAt)fail('رکورد حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'RECORD_ARCHIVED');
     if(prefix==='task'&&project?.tasks?.some(task=>task.id===payload.id&&task.archivedAt))fail('وظیفه حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'RECORD_ARCHIVED');
   }
-  if(action.startsWith('personalStock.')) {
+  if(action.startsWith('finance.')) {
+    result=applyFinanceAction(draft,user,action,payload);
+    audit(draft,user,action,{id:result.id},'سند مالی ثبت شد؛ اسناد پیشین بدون بازنویسی حفظ شدند.');
+  } else if(action.startsWith('personalStock.')) {
     result=applyPersonalStockAction(draft,user,action,payload);
     audit(draft,user,action,{id:result.id||payload.id},'حساب برداشت شخصی همکار به‌روزرسانی شد.');
   } else if(action==='account.primary-manager.transfer') {
@@ -469,22 +474,27 @@ export function applyAction(state, userId, action, payload = {}) {
     if (person.role === 'manager' && requestedRole !== 'manager') fail('نقش مدیر اصلی از این فرم تغییر نمی‌کند.', 403, 'MANAGER_ROLE_PROTECTED');
     if (person.role !== 'manager' && !['worker', 'customer', 'warehouse', 'accountant'].includes(requestedRole)) fail('نقش حساب معتبر نیست.');
     if (requestedRole === 'warehouse' && !person.username) fail('برای انباردار نام کاربری مجزا ثبت کنید.', 400, 'USERNAME_REQUIRED');
+    if(payload.replaceProjectIds!==undefined&&typeof payload.replaceProjectIds!=='boolean')fail('حالت انتساب پروژه معتبر نیست.');
+    const replaceProjects=payload.replaceProjectIds===true;
     const projectIds = payload.projectIds ?? [];
     if (!Array.isArray(projectIds) || projectIds.length > 100 || projectIds.some(value => typeof value !== 'string') || new Set(projectIds).size !== projectIds.length) fail('فهرست پروژه‌ها معتبر نیست.');
     const selectedProjects = projectIds.map(value => find(draft.projects, value, 'پروژه'));
+    const selectedProjectIds=new Set(projectIds);
     if(selectedProjects.some(project=>project.archivedAt))fail('انتساب تازه به پروژهٔ حذف‌شده مجاز نیست؛ ابتدا پروژه را بازیابی کنید.',409,'PROJECT_ARCHIVED');
     const warnings = [];
     if (requestedRole === 'worker') {
       if (person.hourlyRate === undefined) person.hourlyRate = 0;
       if (!Array.isArray(person.rateHistory)) person.rateHistory = [];
       for (const project of draft.projects) {
-        if (project.customerId === person.id) { project.customerId = null; project.memberIds = [...new Set([...(project.memberIds || []), person.id])]; }
+        if (project.customerId === person.id) { project.customerId = null; if(!replaceProjects||selectedProjectIds.has(project.id))project.memberIds = [...new Set([...(project.memberIds || []), person.id])]; }
+        if(replaceProjects&&!selectedProjectIds.has(project.id))project.memberIds=(project.memberIds||[]).filter(id=>id!==person.id);
       }
       for (const project of selectedProjects) project.memberIds = [...new Set([...(project.memberIds || []), person.id])];
     } else if (requestedRole === 'customer') {
       const candidates = new Set(selectedProjects.map(project => project.id));
       for (const project of draft.projects) {
-        if ((project.memberIds || []).includes(person.id)) candidates.add(project.id);
+        if (!replaceProjects&&(project.memberIds || []).includes(person.id)) candidates.add(project.id);
+        if(replaceProjects&&project.customerId===person.id&&!selectedProjectIds.has(project.id))project.customerId=null;
         project.memberIds = (project.memberIds || []).filter(value => value !== person.id);
       }
       for (const project of draft.projects.filter(project => candidates.has(project.id))) {
@@ -498,6 +508,7 @@ export function applyAction(state, userId, action, payload = {}) {
       project.contactIds = (project.contactIds || []).filter(value => value !== person.id);
     }
     person.role = requestedRole;
+    applyPersonProfile(person,payload);
     result = { ...safeUser(person, true), warnings };
     audit(draft, user, action, person, 'اطلاعات تماس و نقش حساب به‌روزرسانی شد.');
   } else if (action === 'account.archive' || action === 'account.restore') {
@@ -723,6 +734,10 @@ export function applyAction(state, userId, action, payload = {}) {
     }
     result = stock;
   } else fail('عملیات شناخته‌شده نیست.', 400, 'UNKNOWN_ACTION');
+  // Validate aggregates before committing: individually valid whole-toman rows
+  // must not leave the manager's calculated accounts unreadable through overflow.
+  const financialActor=draft.users.find(person=>!person.deletedAt&&['manager','accountant'].includes(person.role));
+  if(financialActor)employeeFinanceSnapshot(draft,financialActor);
   const detachedResult = copy(result);
   for (const key of Object.keys(state)) delete state[key];
   Object.assign(state, draft);

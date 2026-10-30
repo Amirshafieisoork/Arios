@@ -16,9 +16,9 @@ export function portalNavigation(role) {
   if (role === 'accountant') return {main:[['finance','حسابداری و صورت‌حساب','finance'],['reports','گزارش تفصیلی و تأییدها','reports']],links:[]};
   return {
     main:[['dashboard',role === 'customer' ? 'نمای کلی من' : 'داشبورد','dashboard'],['projects',role === 'customer' ? 'پروژه‌های من' : 'پروژه‌ها','projects'],
-      ...(role !== 'customer' ? [['reports','گزارش‌های کار','reports'],['voice','ویس و گزارش هوشمند','assistant'],['inventory',role === 'worker' ? 'مصرف و برگشت کالا' : 'تجهیزات و انبار','inventory']] : []),
-      ...(role === 'manager' ? [['management','مدیریت اطلاعات','settings'],['team','کاربران و دسترسی‌ها','team'],['customers','مشتریان و پیگیری فروش','team'],['leads','درخواست‌های مشاوره','support']] : []),
-      ...(['manager','customer'].includes(role) ? [['finance',role === 'customer' ? 'صورت‌حساب و پرداخت' : 'مالی و صورت‌حساب','finance']] : [])],
+      ...(role !== 'customer' ? [['reports',role === 'worker' ? 'گزارش و مأموریت من' : 'گزارش‌ها و تأییدها','reports'],['voice','صندوق ویس‌ها','assistant'],['inventory',role === 'worker' ? 'مصرف و برگشت کالا' : 'تجهیزات و انبار','inventory']] : []),
+      ...(role === 'manager' ? [['management','ویرایش و بایگانی','settings'],['team','افراد و همکاری','team'],['customers','مشتریان','team'],['leads','درخواست‌های مشاوره','support']] : []),
+      ...(['manager','customer'].includes(role) ? [['finance',role === 'customer' ? 'صورت‌حساب و پرداخت' : 'حسابداری','finance']] : [])],
     links:[['calendar','تقویم و برنامه‌ریزی','calendar'],['documents','مدارک و فایل‌ها','reports'],['messages','گفت‌وگوها','messages'],['support','مرکز پشتیبانی','support'],['assistant','دستیار آریوس','assistant'],['notifications','مرکز پیگیری','bell']],
   };
 }

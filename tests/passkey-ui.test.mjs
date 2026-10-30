@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {creationOptionsFromJSON,requestOptionsFromJSON,credentialJSON,decodeBase64URL,encodeBase64URL,loginWithPasskey,registerPasskey,mountPasskeyLogin,passkeySupport,passkeyMessage} from '../public/passkey-client.mjs';
+import {creationOptionsFromJSON,requestOptionsFromJSON,credentialJSON,decodeBase64URL,encodeBase64URL,loginWithPasskey,registerPasskey,mountPasskeyLogin,passkeySupport,passkeyMessage,preparePasskeyRegistration,passkeyDeviceHelp} from '../public/passkey-client.mjs';
 import {renderPasskeySettings,wirePasskeySettings,passkeyDeviceHTML} from '../public/passkey-settings.mjs';
 
 const b64=value=>Buffer.from(value).toString('base64url');
@@ -19,13 +19,13 @@ function credential(type='registration'){
 }
 async function flush(){for(let i=0;i<15;i++)await new Promise(resolve=>setImmediate(resolve));}
 
-test('browser options decode binary values and require verified platform discoverable registration without altering native challenge',()=>{
+test('browser options decode binary values and require verified discoverable registration compatible with phone credential managers without altering native challenge',()=>{
   const original=structuredClone(creation),scope=fakeScope();
   const parsed=creationOptionsFromJSON(creation,scope);
   assert.deepEqual([...new Uint8Array(parsed.challenge)],[1,2,3,4]);
   assert.deepEqual([...new Uint8Array(parsed.user.id)],[9,8,7]);
   assert.deepEqual([...new Uint8Array(parsed.excludeCredentials[0].id)],[6,5]);
-  assert.deepEqual(parsed.authenticatorSelection,{residentKey:'required',userVerification:'required',authenticatorAttachment:'platform'});
+  assert.deepEqual(parsed.authenticatorSelection,{residentKey:'required',userVerification:'required',requireResidentKey:true});
   assert.deepEqual(creation,original);
   const assertion=requestOptionsFromJSON({challenge,allowCredentials:[{id:b64([6,5]),type:'public-key'}],userVerification:'preferred'},scope);
   assert.equal(assertion.userVerification,'required');assert.equal(encodeBase64URL(assertion.challenge),challenge);
@@ -122,4 +122,36 @@ test('an account switch while a list request is pending cannot paint previous-ac
 test('web and portal clients remain identical, with no password storage and passkey styling before readability overrides',async()=>{
   const [web,portal,login,index]=await Promise.all(['web/passkey-client.mjs','public/passkey-client.mjs','web/login.html','public/index.html'].map(file=>readFile(new URL('../'+file,import.meta.url),'utf8')));
   assert.equal(web,portal);assert(!/localStorage|sessionStorage/.test(web));assert(login.includes('data-passkey-login'));assert(login.indexOf('/passkeys.css')<login.indexOf('/typography.css'));assert(index.indexOf('./passkeys.css')<index.indexOf('./typography.css'));
+});
+
+
+test('prepared enrollment starts the browser ceremony synchronously in the activation click, without awaiting the network',async()=>{
+  const events=[],scope=fakeScope({create:async()=>{events.push('browser-create');return credential();}});
+  const prepared=options(creation),fetcher=async(url)=>{events.push(url);return json({passkey:{id:'saved'}});};
+  const pending=registerPasskey({scope,fetcher,start:prepared});
+  assert.deepEqual(events,['browser-create']);
+  await pending;assert.deepEqual(events,['browser-create','/api/passkeys/register/verify']);
+});
+
+test('prepared login preserves the user activation and never creates an unverified account session',async()=>{
+  const events=[],scope=fakeScope({get:async()=>{events.push('browser-get');return credential('authentication');}});
+  const pending=loginWithPasskey({scope,start:options({challenge}),fetcher:async url=>{events.push(url);return json({user:{role:'worker'},portal:'team'});}});
+  assert.deepEqual(events,['browser-get']);await pending;assert.deepEqual(events,['browser-get','/api/passkeys/login/verify']);
+});
+
+test('device guidance explains embedded browsers and local phone setup without claiming to read biometric data',()=>{
+  assert.match(passkeyDeviceHelp(fakeScope({navigator:{userAgent:'Android; wv)'}})),/Chrome.*Safari/);
+  assert.match(passkeyDeviceHelp(fakeScope({navigator:{userAgent:'iPhone'}})),/iCloud/);
+  assert.match(passkeyDeviceHelp(fakeScope({navigator:{userAgent:'Android'}})),/Google/);
+  assert.match(passkeyMessage({code:'PASSKEY_ALREADY_REGISTERED'}),/قبلاً ثبت/);
+});
+
+
+test('canonical setup handoff preserves explicit activation intent and normal password login stays direct',async()=>{
+  const [settings,login,html]=await Promise.all(['public/passkey-settings.mjs','web/login.mjs','web/login.html'].map(file=>readFile(new URL('../'+file,import.meta.url),'utf8')));
+  assert.match(settings,/https:\/\/arioshub\.ir\/login\/.*\?setup=passkey/);
+  assert.match(login,/setupPasskey\|\|passkeyChoice\?\.checked/);
+  assert.match(login,/setupPasskey\?'settings':landingPage\(role\)/);
+  assert(html.includes('id="login-enable-passkey"'));
+  assert(!html.includes('id="login-enable-passkey" checked'));
 });

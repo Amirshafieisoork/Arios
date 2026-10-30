@@ -9,6 +9,7 @@ import { workspaceState } from './account-state.mjs';
 import { handleReminders } from './reminder-service.mjs';
 import { createPublicLead, listLeads, updateLeadStatus } from './lead-service.mjs';
 import { handleProjectFiles } from './project-files.mjs';
+import { handleBackups, runWeeklyBackup } from './backup-service.mjs';
 
 const fail = (message: string, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
@@ -102,10 +103,14 @@ export function createHandler(options: any = {}) {
       }));
       if (path === '/api/password-reset/request' && request.method === 'POST') return json(await requestPasswordReset(repo, await readJSON(request, 4096)));
       if (path === '/api/internal/telegram-tick') {
-        return await handleReminders({ repo, request, path, fetcher, readJSON, json, env: options.env || {} });
+        const response = await handleReminders({ repo, request, path, fetcher, readJSON, json, env: options.env || {} });
+        if (response?.ok) await runWeeklyBackup({ repo, supabase: client, fetcher });
+        return response;
       }
       const { user, state } = await authenticate(request, client, repo);
       await rate(repo, `request:${user.id}`, 120);
+      const backups = await handleBackups({ repo, supabase: client, user, request, path, readJSON, json, fetcher });
+      if (backups) return backups;
       const reminders = await handleReminders({ repo, user, request, path, fetcher, readJSON, json, env: options.env || {} });
       if (reminders) return reminders;
       const projectFiles = await handleProjectFiles({ repo, supabase: client, user, request, path, readJSON, json });

@@ -1,8 +1,11 @@
-import {mountPasskeyLogin} from './passkey-client.mjs';
+import {mountPasskeyLogin,offerPasskeySetupAfterLogin} from './passkey-client.mjs';
 import {mountPasswordRecovery} from './recovery.mjs';
 import {landingPage} from './portal-access.mjs';
 const portal=location.pathname.replace(/\/+$/,'').endsWith('/client')?'client':'team';
 const client=portal==='client';
+const setupPasskey=new URLSearchParams(location.search).get('setup')==='passkey';
+const destinationPage=role=>setupPasskey?'settings':landingPage(role);
+const passkeyChoice=document.querySelector('#login-enable-passkey');if(passkeyChoice)passkeyChoice.checked=setupPasskey;
 const set=(selector,value)=>{const el=document.querySelector(selector);if(el)el.textContent=value;};
 document.title=(client?'ورود مشتریان':'ورود همکاران')+' | گروه آریوس';
 set('[data-portal-tag]',client?'پنل اختصاصی مشتریان':'فضای کار تیم آریوس');
@@ -31,9 +34,9 @@ form.addEventListener('submit',async event=>{
   if(!data.user)throw new Error('ورود تأیید نشد. لطفاً دوباره امتحان کنید.');
   if(!['manager','worker','customer','warehouse','accountant'].includes(data.user.role))throw new Error('دسترسی حساب شما هنوز آماده نیست. با مدیر آریوس هماهنگ کنید.');
   const destination=data.portal==='client'||data.portal==='team'?data.portal:data.user.role==='customer'?'client':'team';
-  password.value='';label.textContent='ورود انجام شد';location.assign('/portal/?portal='+destination+'#'+landingPage(data.user.role));
+  password.value='';label.textContent='ورود انجام شد';if(setupPasskey||passkeyChoice?.checked)await offerPasskeySetupAfterLogin({force:true});location.assign('/portal/?portal='+destination+'#'+destinationPage(data.user.role));
  }catch(err){error.textContent=err instanceof TypeError?'ارتباط برقرار نشد. اتصال اینترنت را بررسی و دوباره امتحان کنید.':err.message||'ورود انجام نشد.';error.hidden=false;button.disabled=false;label.textContent=client?'ورود به پنل مشتریان':'ورود به فضای کار';}
 });
 
-mountPasskeyLogin({portal,onSuccess:data=>{const destination=data.portal==='client'||data.portal==='team'?data.portal:data.user.role==='customer'?'client':'team';password.value='';location.assign('/portal/?portal='+destination+'#'+landingPage(data.user.role));}});
+mountPasskeyLogin({portal,onSuccess:data=>{const destination=data.portal==='client'||data.portal==='team'?data.portal:data.user.role==='customer'?'client':'team';password.value='';location.assign('/portal/?portal='+destination+'#'+destinationPage(data.user.role));}});
 mountPasswordRecovery();

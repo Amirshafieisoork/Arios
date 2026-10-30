@@ -124,3 +124,23 @@ export function wireWorkspaceHub(page,state,ctx = {},{root = typeof document !==
   };
   project.addEventListener('change',() => {selectedDay = '';draw();});draw();
 }
+
+/** Next steps use only the viewer's scoped snapshot, with no extra data fetch. */
+export function workspaceNextActions(state,{today=todayISO()}={}) {
+ const role=state?.user?.role,reports=rows(state?.reports),projects=rows(state?.projects);
+ if(role==='manager')return [
+  {href:'#reports',title:'گزارش‌ها و تأییدها',detail:reports.some(r=>r.status==='submitted')?'گزارش‌های روزانهٔ منتظر بررسی را تأیید یا برای اصلاح برگردانید.':'گزارش روزانه و پروندهٔ تفصیلی پروژه‌ها را یک‌جا پیگیری کنید.',count:reports.filter(r=>r.status==='submitted').length,label:'گزارش منتظر بررسی',icon:'reports'},
+  {href:'#voice',title:'صندوق ویس‌های تیم',detail:'صوت، متن تبدیل‌شده و پیش‌نویس؛ مرتب بر اساس مرحلهٔ آماده‌سازی.',icon:'assistant'},
+  {href:'#team',title:'افراد و اطلاعات همکاری',detail:'حساب، مشخصات همکاری، نرخ کارکرد و مسئولیت‌های هر فرد.',icon:'team'},
+  {href:'#finance',title:'حساب‌ها، مساعده و تنخواه',detail:'دریافت و پرداخت پروژه، حساب همکاران و ماندهٔ تنخواه.',icon:'finance'},
+ ];
+ if(role==='worker') {
+  const tasks=projects.flatMap(project=>rows(project.tasks).filter(task=>task.assigneeId===state.user.id&&rows(project.memberIds).includes(state.user.id)&&['open','in_progress'].includes(task.status))),due=tasks.filter(task=>task.dueDate&&task.dueDate<=today),changes=reports.filter(report=>report.workerId===state.user.id&&report.status==='changes_requested');
+  return [{href:'#reports',title:'مأموریت‌ها و گزارش‌های من',detail:due.length?'مأموریت‌های امروز و کارهای باز را بررسی کنید.':'برنامهٔ کاری و گزارش‌های روزانهٔ خود را اینجا ببینید.',count:due.length,label:'مأموریت تا امروز',icon:'calendar'},{href:'#voice',title:'ثبت گزارش با ویس',detail:'ویس تازه بفرستید یا متن پیش‌نویس‌های قبلی را تکمیل کنید.',icon:'assistant'},{href:'#reports',title:'گزارش‌های نیازمند اصلاح',detail:changes.length?'یادداشت مدیر را بخوانید و گزارش را دوباره بفرستید.':'نتیجهٔ بررسی گزارش‌ها و سابقهٔ فعالیت خود را ببینید.',count:changes.length,label:'گزارش برای اصلاح',icon:'reports'},{href:'#projects',title:'پروژه‌های من',detail:'جزئیات پروژه، اعضای تیم و فایل‌های مورد نیاز کار.',icon:'projects'}];
+ }
+ return [];
+}
+export function renderWorkspaceNextActions(state,ctx={}) {
+ const actions=workspaceNextActions(state,{today:ctx.today?.()||todayISO()}),e=ctx.e||escape,n=ctx.n||String;if(!actions.length)return '';
+ return `<section class="workspace-next-actions" aria-labelledby="workspace-next-actions-title"><div class="workspace-next-head"><div><h2 id="workspace-next-actions-title">از کجا شروع کنم؟</h2><p>کار مورد نظرتان را مستقیم انتخاب کنید.</p></div><a class="text-link" href="#projects">همهٔ پروژه‌ها ←</a></div><div class="workspace-next-grid">${actions.map(action=>`<a class="workspace-next-card" href="${e(action.href)}"><span class="workspace-next-icon" aria-hidden="true">${ctx.icon?ctx.icon(action.icon):'←'}</span><h3>${e(action.title)}</h3><p>${e(action.detail)}</p><span class="workspace-next-foot">${Number.isInteger(action.count)?`<span><b>${e(n(action.count))}</b> ${e(action.label)}</span>`:'<span>باز کردن بخش</span>'}<span aria-hidden="true">←</span></span></a>`).join('')}</div></section>`;
+}

@@ -51,7 +51,7 @@ test('catalog changes commit through audited domain actions and archived labels 
  assert(!publicState(state,'worker').catalogs.units.some(row=>row.id===entry.id));
 });
 test('manager team includes protected manager editor and preserves manager role on save',()=>{
- const state=fixture(),html=renderOperations('team',state,ctx);assert(html.includes('<h2>مدیران</h2>'));assert(html.includes('data-edit-account="manager"'));assert(!html.includes('data-archive-account="manager"'));
+ const state=fixture(),html=renderOperations('team',state,ctx);assert(html.includes('data-person-role="manager"'));assert(html.includes('افراد و پروندهٔ همکاری'));assert(html.includes('data-edit-account="manager"'));assert(!html.includes('data-archive-account="manager"'));
  let click,modal,payload;const previous=globalThis.document;
  globalThis.document={querySelector:()=>null,querySelectorAll:selector=>selector==='[data-edit-account]'?[{dataset:{editAccount:'manager'},addEventListener:(_event,fn)=>{click=fn;}}]:[]};
  try{wireOperations('team',state,{...ctx,modal:value=>{modal=value;},mutate:async(action,value)=>{payload={action,value};}});click();assert(modal);const roleField=modal.body.match(/<select name="role">[\s\S]*?<\/select>/)?.[0];assert(roleField.includes('value="manager" selected'));assert(!roleField.includes('value="worker"'));const data=new FormData();for(const [key,value]of Object.entries({name:manager.name,phone:manager.phone,role:'manager',username:'',department:'',skill:''}))data.set(key,value);modal.onSubmit(data);assert.equal(payload.action,'account.update');assert.equal(payload.value.role,'manager');}finally{globalThis.document=previous;}

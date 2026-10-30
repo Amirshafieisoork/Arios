@@ -1,8 +1,8 @@
-import {listPasskeys,registerPasskey,renamePasskey,removePasskey,passkeySupport,passkeyMessage,passkeyAvailability} from './passkey-client.mjs';
+import {listPasskeys,registerPasskey,renamePasskey,removePasskey,passkeySupport,passkeyMessage,passkeyAvailability,preparePasskeyRegistration,passkeyDeviceHelp} from './passkey-client.mjs';
 const roles=new Set(['manager','worker','customer','warehouse','accountant']);
 export function renderPasskeySettings(state,ctx){
   if(!state.user||!roles.has(state.user.role))return '';
-  return `<section class="card passkey-settings" data-passkey-settings-user="${ctx.e(state.user.id)}"><div class="card-head"><div><h2>ورود با اثر انگشت یا چهره</h2><p class="muted">با یک‌بار فعال‌سازی، دفعات بعد با تأیید گوشی وارد شوید.</p></div></div><p>اطلاعات اثر انگشت یا چهره روی دستگاه شما می‌ماند. بسته به تنظیم گوشی، تأیید با اثر انگشت، تشخیص چهره یا رمز قفل دستگاه انجام می‌شود.</p><div class="actions"><button type="button" class="button primary" data-passkey-register>فعال‌سازی ورود با اثر انگشت</button><button type="button" class="button secondary" data-passkey-reload>تازه‌سازی فهرست</button></div><p class="passkey-status muted" data-passkey-settings-status role="status" aria-live="polite">در حال دریافت کلیدهای ورود…</p><div class="passkey-device-list" data-passkey-devices></div><p class="muted">ورود با رمز عبور هم در دسترس می‌ماند. اگر کلیدی را نمی‌شناسید یا دیگر از آن استفاده نمی‌کنید، آن را حذف کنید.</p></section>`;
+  return `<section class="card passkey-settings" data-passkey-settings-user="${ctx.e(state.user.id)}"><div class="card-head"><div><h2>ورود با اثر انگشت یا چهره</h2><p class="muted">همین دستگاه را یک‌بار ثبت کنید؛ دفعهٔ بعد بدون نوشتن رمز وارد شوید.</p></div></div><p>اطلاعات اثر انگشت یا چهره روی دستگاه شما می‌ماند. بسته به تنظیم گوشی، تأیید با اثر انگشت، تشخیص چهره یا رمز قفل دستگاه انجام می‌شود.</p><p class="muted" data-passkey-device-help></p><a class="text-link" href="https://arioshub.ir/login/${state.user.role==='customer'?'client':'team'}?setup=passkey" data-passkey-settings-canonical hidden>ورود و فعال‌سازی در دامنهٔ اصلی آریوس</a><div class="actions"><button type="button" class="button primary" data-passkey-register disabled>فعال‌سازی روی این دستگاه</button><button type="button" class="button secondary" data-passkey-reload>تازه‌سازی فهرست</button></div><p class="passkey-status muted" data-passkey-settings-status role="status" aria-live="polite">در حال دریافت کلیدهای ورود…</p><div class="passkey-device-list" data-passkey-devices></div><p class="muted">ورود با رمز عبور هم در دسترس می‌ماند. اگر کلیدی را نمی‌شناسید یا دیگر از آن استفاده نمی‌کنید، آن را حذف کنید.</p></section>`;
 }
 export function passkeyDeviceHTML(entries,ctx){
   return entries.map(entry=>`<article class="passkey-device"><div><strong>${ctx.e(entry.friendly_name||'کلید ورود من')}</strong>${entry.created_at?`<p class="muted">ثبت: ${ctx.e(ctx.date(entry.created_at))}</p>`:''}<p class="muted">${entry.last_used_at?'آخرین ورود: '+ctx.e(ctx.date(entry.last_used_at)):'هنوز برای ورود استفاده نشده است.'}</p></div><div class="actions"><button type="button" class="button secondary small" data-passkey-rename="${ctx.e(entry.id)}">تغییر نام</button><button type="button" class="button secondary small" data-passkey-remove="${ctx.e(entry.id)}">حذف کلید</button></div></article>`).join('')||'<p class="muted">هنوز کلید ورودی برای این حساب ثبت نشده است.</p>';
@@ -14,11 +14,14 @@ export function wirePasskeySettings(state,ctx,{scope=globalThis,fetcher=fetch}={
   const current=()=>root.isConnected!==false&&root.dataset.passkeySettingsUser===state.user.id;
   const message=(text,failed=false)=>{if(current()){status.textContent=text;status.setAttribute('role',failed?'alert':'status');}};
   if(ctx.api?.isStatic||ctx.demo){enroll.disabled=true;reload.disabled=true;message('برای فعال‌سازی این روش، وارد حساب اصلی آریوس شوید.');return;}
-  const support=passkeySupport(scope);if(!support.supported)enroll.disabled=true;
-  let entries=[],loading=false,configured=true;
+  const help=root.querySelector('[data-passkey-device-help]');if(help)help.textContent=passkeyDeviceHelp(scope);
+  const canonical=root.querySelector('[data-passkey-settings-canonical]');
+  const support=passkeySupport(scope);enroll.disabled=true;if(canonical)canonical.hidden=support.code!=='PASSKEY_WRONG_DOMAIN';
+  let entries=[],loading=false,configured=true,prepared;
+  const prepare=async()=>{prepared=null;enroll.disabled=true;try{const value=await preparePasskeyRegistration({scope,fetcher});if(current()){prepared=value;enroll.disabled=false;}}catch(value){message(passkeyMessage(value),true);}};
   const load=async()=>{
     if(loading||!current())return;loading=true;reload.disabled=true;
-    try{const [availability,result]=await Promise.all([passkeyAvailability({fetcher}),listPasskeys({fetcher})]);if(!current())return;configured=availability.enabled===true&&availability.domainSupported!==false;enroll.disabled=!support.supported||!configured;entries=result;devices.innerHTML=passkeyDeviceHTML(entries,ctx);wireEntries();message(!support.supported?passkeyMessage({code:support.code}):!configured?passkeyMessage({code:availability.domainSupported===false?'PASSKEY_WRONG_DOMAIN':'PASSKEY_NOT_CONFIGURED'}):'');}
+    try{const [availability,result]=await Promise.all([passkeyAvailability({fetcher}),listPasskeys({fetcher})]);if(!current())return;configured=availability.enabled===true&&availability.domainSupported!==false;entries=result;devices.innerHTML=passkeyDeviceHTML(entries,ctx);wireEntries();message(!support.supported?passkeyMessage({code:support.code}):!configured?passkeyMessage({code:availability.domainSupported===false?'PASSKEY_WRONG_DOMAIN':'PASSKEY_NOT_CONFIGURED'}):'در حال آماده‌سازی اتصال امن این دستگاه…');if(support.supported&&configured){await prepare();if(prepared)message(entries.length?'برای افزودن کلید روی این دستگاه، فعال‌سازی را بزنید.':'آماده است؛ فعال‌سازی را بزنید و پنجرهٔ خود گوشی را تأیید کنید.');}}
     catch(value){message(passkeyMessage(value),true);if(value.code==='PASSKEY_NOT_CONFIGURED')enroll.disabled=true;}
     finally{loading=false;if(current())reload.disabled=false;}
   };
@@ -33,10 +36,12 @@ export function wirePasskeySettings(state,ctx,{scope=globalThis,fetcher=fetch}={
     }));
   };
   enroll.addEventListener('click',async()=>{
-    if(enroll.disabled||!current())return;enroll.disabled=true;message('در انتظار تأیید گوشی…');
-    try{await registerPasskey({fetcher,scope});if(!current())return;await load();message('کلید ورود ثبت شد؛ از این پس می‌توانید با تأیید گوشی وارد شوید.');}
-    catch(value){message(passkeyMessage(value),true);}
-    finally{if(current())enroll.disabled=!support.supported||!configured;}
+    if(enroll.disabled||!current())return;
+    if(!prepared||prepared.expires_at*1000<=Date.now()+5000){message('مهلت اتصال تمام شد؛ در حال آماده‌سازی دوباره…');await prepare();if(prepared)message('آماده است؛ برای تأیید گوشی دوباره فعال‌سازی را بزنید.');return;}
+    enroll.disabled=true;message('در پنجرهٔ گوشی، ذخیرهٔ کلید ورود آریوس را تأیید کنید…');
+    try{await registerPasskey({fetcher,scope,start:prepared});if(!current())return;await load();message('کلید ورود ثبت شد؛ از این پس می‌توانید با تأیید گوشی وارد شوید.');}
+    catch(value){const detail=passkeyMessage(value);await prepare();message(detail,true);}
+    finally{if(current())enroll.disabled=!support.supported||!configured||!prepared;}
   });
   reload.addEventListener('click',load);void load();
 }

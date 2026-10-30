@@ -10,23 +10,34 @@ const messages={
   UNAUTHORIZED:'برای مدیریت روش‌های ورود، دوباره با حساب خود وارد شوید.',
   RATE_LIMITED:'تعداد تلاش‌ها زیاد شده است. کمی بعد دوباره امتحان کنید.',
   PASSKEY_UNSUPPORTED:'مرورگر یا دستگاه شما این روش را پشتیبانی نمی‌کند. می‌توانید با رمز عبور وارد شوید.',
+  PASSKEY_ALREADY_REGISTERED:'این دستگاه قبلاً ثبت شده است. می‌توانید با دکمهٔ ورود با اثر انگشت وارد شوید.',
+  PASSKEY_LIMIT_REACHED:'تعداد کلیدهای حساب کامل است. از تنظیمات حساب، کلید قدیمی را حذف کنید.',
+  PASSKEY_ACCOUNT_UNAVAILABLE:'حساب شما برای این روش ورود آماده نیست. با مدیر آریوس هماهنگ کنید.',
   PASSKEY_CANCELLED:'تأیید گوشی کامل نشد. دوباره امتحان کنید یا با رمز عبور وارد شوید.',
 };
 function error(code,message){const value=new Error(message||messages[code]||'درخواست انجام نشد. دوباره تلاش کنید.');value.code=code;return value;}
 export function passkeyMessage(value){
   if(messages[value?.code])return messages[value.code];
   if(['NotAllowedError','AbortError'].includes(value?.name))return messages.PASSKEY_CANCELLED;
+  if(value?.name==='TimeoutError')return 'پاسخ سرویس طول کشید. اتصال اینترنت را بررسی و دوباره امتحان کنید.';
   if(value?.name==='InvalidStateError')return 'این کلید ورود قبلاً ثبت شده است. از فهرست کلیدهای ورود استفاده کنید.';
   if(value?.name==='SecurityError')return messages.PASSKEY_WRONG_DOMAIN;
-  if(value?.name==='NotSupportedError')return messages.PASSKEY_UNSUPPORTED;
+  if(value?.name==='NotSupportedError')return 'ابتدا قفل صفحهٔ گوشی و مدیر گذرواژهٔ Google یا iCloud را فعال کنید؛ سپس در Chrome یا Safari دوباره امتحان کنید.';
   if(['InvalidCharacterError','DataError'].includes(value?.name))return messages.PASSKEY_INVALID_RESPONSE;
-  if(value instanceof TypeError)return 'ارتباط برقرار نشد. اینترنت را بررسی و دوباره امتحان کنید.';
+  if(value instanceof TypeError)return 'درخواست دستگاه اجرا نشد. صفحه را در Chrome یا Safari باز کنید و دوباره امتحان کنید.';
   return value?.message||'درخواست انجام نشد. دوباره تلاش کنید.';
 }
 export function passkeySupport(scope=globalThis){
   if(!scope.isSecureContext||!scope.PublicKeyCredential||!scope.navigator?.credentials?.create||!scope.navigator?.credentials?.get)return {supported:false,code:'PASSKEY_UNSUPPORTED'};
   if(!hosts.has(scope.location?.hostname))return {supported:false,code:'PASSKEY_WRONG_DOMAIN'};
   return {supported:true};
+}
+export function passkeyDeviceHelp(scope=globalThis){
+  const agent=String(scope.navigator?.userAgent||'');
+  if(/(?:; wv\)|\bFBAN\b|\bFBAV\b|Instagram|Telegram|Line\/)/i.test(agent))return 'این صفحه را از منوی مرورگر در Chrome یا Safari باز کنید؛ مرورگر داخل پیام‌رسان ممکن است ورود با اثر انگشت را پشتیبانی نکند.';
+  if(/iPhone|iPad|iPod/i.test(agent))return 'قفل صفحه و Passwords / iCloud Keychain گوشی باید فعال باشد. تأیید را در پنجرهٔ خود گوشی انجام دهید.';
+  if(/Android/i.test(agent))return 'قفل صفحه و Google Password Manager گوشی باید فعال باشد. تأیید را در پنجرهٔ خود گوشی انجام دهید.';
+  return 'در پنجرهٔ دستگاه، مدیر گذرواژهٔ خود را انتخاب کنید و با اثر انگشت، چهره یا رمز قفل دستگاه تأیید کنید.';
 }
 function supported(scope){const support=passkeySupport(scope);if(!support.supported)throw error(support.code);}
 export function decodeBase64URL(value){
@@ -45,7 +56,8 @@ export function creationOptionsFromJSON(value,scope=globalThis){
   const options=typeof scope.PublicKeyCredential?.parseCreationOptionsFromJSON==='function'
     ?scope.PublicKeyCredential.parseCreationOptionsFromJSON(value)
     :{...value,challenge:decodeBase64URL(value.challenge),user:{...value.user,id:decodeBase64URL(value.user.id)},...(value.excludeCredentials?{excludeCredentials:value.excludeCredentials.map(item=>({...item,id:decodeBase64URL(item.id)}))}:{})};
-  return {...options,authenticatorSelection:{...options.authenticatorSelection,authenticatorAttachment:'platform',residentKey:'required',userVerification:'required'}};
+  const {authenticatorAttachment,...selection}=options.authenticatorSelection||{};
+  return {...options,authenticatorSelection:{...selection,residentKey:'required',requireResidentKey:true,userVerification:'required'}};
 }
 export function requestOptionsFromJSON(value,scope=globalThis){
   if(!value||typeof value!=='object'||typeof value.challenge!=='string')throw error('PASSKEY_INVALID_RESPONSE');
@@ -64,22 +76,23 @@ export function credentialJSON(credential){
   return {id:credential.id,rawId:encodeBase64URL(credential.rawId),type:'public-key',response,clientExtensionResults:credential.getClientExtensionResults?.()||{},...(credential.authenticatorAttachment?{authenticatorAttachment:credential.authenticatorAttachment}:{})};
 }
 async function request(path,{method='POST',body,fetcher=fetch}={}){
-  const response=await fetcher('/api/passkeys'+path,{method,credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},...(method==='GET'?{}:{body:JSON.stringify(body||{})})});
+  const response=await fetcher('/api/passkeys'+path,{method,...(globalThis.AbortSignal?.timeout?{signal:AbortSignal.timeout(25000)}:{}),credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},...(method==='GET'?{}:{body:JSON.stringify(body||{})})});
   let data;try{data=await response.json();}catch{throw error('PASSKEY_INVALID_RESPONSE');}
   if(!response.ok)throw error(data.code,messages[data.code]||'درخواست ورود با تأیید گوشی انجام نشد. دوباره تلاش کنید.');
   return data;
 }
 function startOptions(data){if(!data||typeof data.challenge_id!=='string'||!data.challenge_id||!data.options)throw error('PASSKEY_INVALID_RESPONSE');if(Number.isFinite(data.expires_at)&&data.expires_at*1000<=Date.now())throw error('PASSKEY_CHALLENGE_MISMATCH');return data;}
-export async function loginWithPasskey({portal='team',fetcher=fetch,scope=globalThis}={}){
+export async function loginWithPasskey({portal='team',fetcher=fetch,scope=globalThis,start:prepared}={}){
   supported(scope);const selected=portal==='client'?'client':'team';
-  const start=startOptions(await request('/login/options',{body:{portal:selected},fetcher}));
+  const start=prepared?startOptions(prepared):startOptions(await request('/login/options',{body:{portal:selected},fetcher}));
   const credential=await scope.navigator.credentials.get({publicKey:requestOptionsFromJSON(start.options,scope)});
   if(!credential)throw error('PASSKEY_CANCELLED');
   const result=await request('/login/verify',{body:{challengeId:start.challenge_id,credential:credentialJSON(credential),portal:selected},fetcher});
   if(!result.user||!roles.has(result.user.role))throw error('PASSKEY_INVALID_RESPONSE');return result;
 }
-export async function registerPasskey({fetcher=fetch,scope=globalThis}={}){
-  supported(scope);const start=startOptions(await request('/register/options',{fetcher}));
+export async function preparePasskeyRegistration({fetcher=fetch,scope=globalThis}={}){supported(scope);return startOptions(await request('/register/options',{fetcher}));}
+export async function registerPasskey({fetcher=fetch,scope=globalThis,start:prepared}={}){
+  supported(scope);const start=prepared?startOptions(prepared):await preparePasskeyRegistration({fetcher,scope});
   const credential=await scope.navigator.credentials.create({publicKey:creationOptionsFromJSON(start.options,scope)});
   if(!credential)throw error('PASSKEY_CANCELLED');
   return request('/register/verify',{body:{challengeId:start.challenge_id,credential:credentialJSON(credential)},fetcher});
@@ -91,18 +104,48 @@ export function removePasskey(id,{fetcher=fetch}={}){return request('/remove',{b
 export function mountPasskeyLogin({portal='team',onSuccess,scope=globalThis,fetcher=fetch}={}){
   const doc=scope.document,button=doc?.querySelector('[data-passkey-login]');if(!button)return;
   const status=doc.querySelector('[data-passkey-login-status]'),link=doc.querySelector('[data-passkey-canonical]');
-  if(link)link.href='https://arioshub.ir/login/'+(portal==='client'?'client':'team');
+  const help=doc.querySelector('[data-passkey-login-help]');if(help)help.textContent=passkeyDeviceHelp(scope);
+  let prepared;
+  const prepare=async()=>{prepared=startOptions(await request('/login/options',{body:{portal:portal==='client'?'client':'team'},fetcher}));};
+  if(link)link.href='https://arioshub.ir/login/'+(portal==='client'?'client':'team')+'?setup=passkey';
   const support=passkeySupport(scope);button.disabled=!support.supported;
-  if(!support.supported){if(status)status.textContent=messages[support.code];if(link)link.hidden=support.code!=='PASSKEY_WRONG_DOMAIN';return;}
+  if(!support.supported){if(status)status.textContent=messages[support.code]+' '+passkeyDeviceHelp(scope);if(link)link.hidden=support.code!=='PASSKEY_WRONG_DOMAIN';return;}
   button.disabled=true;
-  void passkeyAvailability({fetcher}).then(data=>{
+  void passkeyAvailability({fetcher}).then(async data=>{
     button.disabled=data.enabled!==true||data.domainSupported===false;
     if(status)status.textContent=data.domainSupported===false?messages.PASSKEY_WRONG_DOMAIN:data.enabled===true?'':messages.PASSKEY_NOT_CONFIGURED;
     if(link)link.hidden=data.domainSupported!==false;
+    if(data.enabled===true&&data.domainSupported!==false){button.disabled=true;try{await prepare();}finally{button.disabled=false;}}
   }).catch(value=>{if(status)status.textContent=passkeyMessage(value);button.disabled=false;});
   button.addEventListener('click',async()=>{
-    if(button.disabled)return;button.disabled=true;if(status){status.textContent='در انتظار تأیید گوشی…';status.setAttribute('role','status');}
-    try{const data=await loginWithPasskey({portal,fetcher,scope});if(status)status.textContent='ورود تأیید شد';if(onSuccess)await onSuccess(data);}
-    catch(value){if(status){status.textContent=passkeyMessage(value);status.setAttribute('role','alert');}button.disabled=false;}
+    if(button.disabled)return;button.disabled=true;if(status){status.textContent='در پنجرهٔ گوشی، حساب آریوس را انتخاب و تأیید کنید…';status.setAttribute('role','status');}
+    try{const data=await loginWithPasskey({portal,fetcher,scope,start:prepared?.expires_at*1000>Date.now()+5000?prepared:undefined});if(status)status.textContent='ورود تأیید شد';if(onSuccess)await onSuccess(data);}
+    catch(value){if(status){status.textContent=passkeyMessage(value);status.setAttribute('role','alert');}button.disabled=false;prepared=null;void prepare().catch(()=>{});}
   });
+}
+
+/** Offer enrollment after a password sign-in, without interrupting an established session. */
+export async function offerPasskeySetupAfterLogin({scope=globalThis,fetcher=fetch,force=false}={}){
+  if(!passkeySupport(scope).supported||!scope.document?.createElement)return;
+  let availability,entries;
+  try{[availability,entries]=await Promise.all([passkeyAvailability({fetcher}),listPasskeys({fetcher})]);}catch{return;}
+  if(availability.enabled!==true||availability.domainSupported===false||entries.length&&!force)return;
+  const doc=scope.document,sheet=doc.createElement('dialog');sheet.className='passkey-setup-dialog';
+  sheet.setAttribute('aria-labelledby','passkey-setup-title');
+  sheet.innerHTML='<h2 id="passkey-setup-title">دفعهٔ بعد، بدون رمز وارد شوید</h2><p>ورود با اثر انگشت، چهره یا قفل گوشی را همین حالا فعال کنید.</p><p class="muted" data-passkey-device-help></p><p data-passkey-setup-status role="status" aria-live="polite">در حال آماده‌سازی اتصال امن…</p><div class="passkey-setup-actions"><button type="button" class="button button-primary" data-passkey-setup-activate disabled>فعال‌سازی روی این دستگاه</button><button type="button" class="button button-quiet" data-passkey-setup-skip>فعلاً ورود به پنل</button></div>';
+  sheet.querySelector('[data-passkey-device-help]').textContent=passkeyDeviceHelp(scope);
+  doc.body.append(sheet);sheet.showModal();
+  const button=sheet.querySelector('[data-passkey-setup-activate]'),skip=sheet.querySelector('[data-passkey-setup-skip]'),status=sheet.querySelector('[data-passkey-setup-status]');
+  let prepared,closed=false,finish;
+  const done=new Promise(resolve=>{finish=()=>{if(closed)return;closed=true;sheet.close();sheet.remove();resolve();};});
+  skip.addEventListener('click',finish);sheet.addEventListener('cancel',event=>{event.preventDefault();finish();});
+  const prepare=async()=>{button.disabled=true;try{prepared=await preparePasskeyRegistration({scope,fetcher});if(closed)return;button.disabled=false;status.textContent='برای ثبت، دکمهٔ زیر را بزنید و پیام گوشی را تأیید کنید.';}catch(value){if(!closed){status.textContent=passkeyMessage(value);button.textContent='تلاش دوباره';button.disabled=false;}}};
+  button.addEventListener('click',async()=>{
+    if(button.disabled||closed)return;
+    if(!prepared||prepared.expires_at*1000<=Date.now()+5000){status.textContent='در حال آماده‌سازی دوباره…';await prepare();return;}
+    button.disabled=true;status.textContent='در پنجرهٔ گوشی، ذخیرهٔ کلید ورود آریوس را تأیید کنید…';
+    try{await registerPasskey({scope,fetcher,start:prepared});if(closed)return;status.textContent='فعال شد. دفعات بعد از «ورود با اثر انگشت یا چهره» استفاده کنید.';button.hidden=true;skip.textContent='ورود به پنل';skip.focus();}
+    catch(value){if(closed)return;const detail=passkeyMessage(value);status.textContent=detail;prepared=null;button.textContent='تلاش دوباره';await prepare();if(!closed)status.textContent=detail;}
+  });
+  void prepare();return done;
 }

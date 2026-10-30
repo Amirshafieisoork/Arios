@@ -158,3 +158,12 @@ test('loopback ceremonies require explicit test or development opt-in and cannot
   const f=fixture(()=>json({...authentication(),options:{...authentication().options,rpId:'localhost'}}),{...ENV,NODE_ENV:'test'});
   const r=await f.call('/api/passkeys/login/options',{app:'http://localhost:4050',origin:'http://localhost:4050'});assert.equal(r.status,200);assert(r.cookies.every(cookie=>!cookie.includes('; Secure')));
 });
+
+
+test('native actionable enrollment failures stay specific without leaking provider diagnostics',async()=>{
+  for(const [upstream,expected,status] of [['webauthn_credential_exists','PASSKEY_ALREADY_REGISTERED',409],['webauthn_challenge_expired','PASSKEY_CHALLENGE_MISMATCH',400],['webauthn_challenge_not_found','PASSKEY_CHALLENGE_MISMATCH',400],['too_many_passkeys','PASSKEY_LIMIT_REACHED',409],['phone_not_confirmed','PASSKEY_ACCOUNT_UNAVAILABLE',403]]){
+    const f=fixture(c=>c.path==='/functions/v1/arios-api/session'?json(session()):json({code:upstream,msg:'private-debug-details'},400));
+    const r=await f.call('/api/passkeys/register/verify',{cookie:'arios_access=current-user; arios_passkey_register='+CHALLENGE,body:{challengeId:CHALLENGE,credential:registrationCredential()}});
+    assert.equal(r.status,status);assert.equal(r.data.code,expected);assert(!JSON.stringify(r.data).includes('private-debug-details'));
+  }
+});
