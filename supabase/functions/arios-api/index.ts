@@ -2,7 +2,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
 import { applyAction, readDossierSubmission } from './domain.mjs';
 import { createRepository } from './repository.mjs';
 import { handleVoice, getConfig, capabilities } from './voice-service.mjs';
-import { APIError, authenticate, bootstrap, createAccount, activateAccount, transferPrimaryManager, passwordLogin, updateAccount, archiveAccount, restoreAccount, resetAccountPassword, requestPasswordReset, listPasswordResetRequests, manager, rate, safeUser } from './auth.mjs';
+import { APIError, authenticate, bootstrap, createAccount, activateAccount, transferPrimaryManager, passwordLogin, updateAccount, archiveAccount, restoreAccount, resetAccountPassword, requestPasswordReset, listPasswordResetRequests, changeOwnPassword, manager, rate, safeUser } from './auth.mjs';
 import { testAIConnection } from './voice-core.mjs';
 import { publicAssistant, publicProjects, workspaceAssistant } from './assistant-service.mjs';
 import { workspaceState } from './account-state.mjs';
@@ -107,8 +107,19 @@ export function createHandler(options: any = {}) {
         if (response?.ok) await runWeeklyBackup({ repo, supabase: client, fetcher });
         return response;
       }
-      const { user, state } = await authenticate(request, client, repo);
+      const { user, state, authUser } = await authenticate(request, client, repo);
       await rate(repo, `request:${user.id}`, 120);
+      if (path === '/api/session' && request.method === 'GET') {
+        const passwordChangeRequired = user.passwordChangeRequired === true;
+        const config = passwordChangeRequired ? {} : await getConfig(repo);
+        return json({ user: safeUser(user), passwordChangeRequired, demo: false, authMode: 'supabase', capabilities: { ...capabilities(config), hosted: true, supabaseAuth: true } });
+      }
+      if (path === '/api/account/password' && request.method === 'POST') {
+        return json(await changeOwnPassword({ client, repo, user, authUser, payload: await readJSON(request,4096), authUrl: readEnv('SUPABASE_URL'), authKey: readEnv('SUPABASE_SERVICE_ROLE_KEY'), fetcher }));
+      }
+      // The first-login restriction is checked before every private business
+      // handler, including files, voice, backups and side-effecting actions.
+      if (user.passwordChangeRequired) fail('برای ورود به پنل، ابتدا رمز اولیهٔ خود را تغییر دهید.',403,'PASSWORD_CHANGE_REQUIRED');
       const backups = await handleBackups({ repo, supabase: client, user, request, path, readJSON, json, fetcher });
       if (backups) return backups;
       const reminders = await handleReminders({ repo, user, request, path, fetcher, readJSON, json, env: options.env || {} });
@@ -119,10 +130,6 @@ export function createHandler(options: any = {}) {
       const leadStatus = path.match(/^\/api\/leads\/([^/]+)\/status$/);
       if (leadStatus && request.method === 'POST') return json(await updateLeadStatus({ repo, user, id: leadStatus[1], payload: await readJSON(request, 1024) }));
       if (path === '/api/password-reset/requests' && request.method === 'GET') return json(await listPasswordResetRequests(repo, user));
-      if (path === '/api/session' && request.method === 'GET') {
-        const config = await getConfig(repo);
-        return json({ user: safeUser(user), demo: false, authMode: 'supabase', capabilities: { ...capabilities(config), hosted: true, supabaseAuth: true } });
-      }
       if (path === '/api/state' && request.method === 'GET') return json(await workspaceState(repo, state, user.id));
       if (path === '/api/project-dossiers/read' && request.method === 'POST') {
         const payload = await readJSON(request,4096);

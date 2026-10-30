@@ -93,7 +93,7 @@ async function streamAudio({request,c,id,result,updated,fetcher,range}){
  return new Response(boundedAudio(upstream.body,MAX_AUDIO_BYTES,length===null?null:Number(length)),{status:upstream.status,headers:responseHeaders});
 }
 
-export function createBff({env=process.env,fetcher=fetch}={}){return async request=>{const secure=new URL(request.url).protocol==='https:';try{const path=new URL(request.url).pathname.replace(/^\/api/,'')||'/';const audioFileId=mediaId(path);if(!['GET','POST'].includes(request.method)&&!(audioFileId&&request.method==='HEAD'))return json({error:'روش درخواست مجاز نیست.'},405);if(audioFileId&&!['GET','HEAD'].includes(request.method))return json({error:'روش درخواست مجاز نیست.'},405);const c=config(env),saved=cookies(request);if(request.method==='POST')checkOrigin(request);
+export function createBff({env=process.env,fetcher=fetch}={}){return async request=>{const secure=new URL(request.url).protocol==='https:';try{const path=new URL(request.url).pathname.replace(/^\/api/,'')||'/';if(path==='/api'||path.startsWith('/api/')||path==='/password-login'||path.startsWith('/internal/'))return json({error:'مسیر پیدا نشد.',code:'NOT_FOUND'},404);const audioFileId=mediaId(path);if(!['GET','POST'].includes(request.method)&&!(audioFileId&&request.method==='HEAD'))return json({error:'روش درخواست مجاز نیست.'},405);if(audioFileId&&!['GET','HEAD'].includes(request.method))return json({error:'روش درخواست مجاز نیست.'},405);const c=config(env),saved=cookies(request);if(request.method==='POST')checkOrigin(request);
  if(audioFileId&&(request.headers.get('sec-fetch-site')==='cross-site'||request.headers.has('origin')&&request.headers.get('origin')!==new URL(request.url).origin))fail('مبدأ درخواست مجاز نیست.',403,'ORIGIN_DENIED');
  const passkeys=await handlePasskeys({path,request,c,saved,secure,fetcher,env,helpers:{json,boundedJSON,readBody,edgeRequest,authRequest,sessionCookies,clearCookies}});if(passkeys)return passkeys;
  if(path==='/login'&&request.method==='POST'){
@@ -125,7 +125,20 @@ export function createBff({env=process.env,fetcher=fetch}={}){return async reque
  let token=saved[ACCESS],updated=[];let body;if(request.method==='POST')body=await readBody(request);const range=audioFileId?audioRange(request):null,edgePath=audioFileId?'/voice/audio':path,edgeInput=audioFileId?new Request(request.url,{method:'POST'}):request;if(audioFileId)body={id:audioFileId};if(path==='/voice/audio'&&request.method==='POST')audioId(body?.id);let result=token?await edgeRequest(c,edgePath,edgeInput,token,fetcher,body):null;
  if((!result||result.response.status===401)&&saved[REFRESH]){try{const session=await authRequest(c,'token?grant_type=refresh_token',{refresh_token:saved[REFRESH]},fetcher);if(typeof session.access_token!=='string'||!session.access_token||typeof session.refresh_token!=='string'||!session.refresh_token)fail('نشست معتبر نیست.',401,'INVALID_SESSION');token=session.access_token;updated=sessionCookies(session,secure);result=await edgeRequest(c,edgePath,edgeInput,token,fetcher,body);}catch{if(path==='/session')return json(safeSession(),200,clearCookies(secure));return json({error:'نشست منقضی شده؛ دوباره وارد شوید.',code:'UNAUTHORIZED'},401,clearCookies(secure));}}
  if(!result)return json({error:'برای ادامه وارد شوید.',code:'UNAUTHORIZED'},401);if(path==='/session'&&result.response.status===401)return json(safeSession(),200,clearCookies(secure));
+ if(path==='/account/password'&&request.method==='POST'&&result.response.ok){
+  const next=result.data;
+  if(typeof next.access_token!=='string'||!next.access_token||typeof next.refresh_token!=='string'||!next.refresh_token)fail('ثبت رمز هنوز تأیید نشده؛ دوباره با رمز تازه وارد شوید.',502,'PASSWORD_CHANGE_SESSION_INVALID');
+  const verified=await edgeRequest(c,'/session',new Request(request.url,{method:'GET'}),next.access_token,fetcher);
+  if(!verified.response.ok||!verified.data.user||verified.data.user.id!==next.user?.id||verified.data.passwordChangeRequired===true||verified.data.user.passwordChangeRequired===true||!['manager','worker','customer','warehouse','accountant'].includes(verified.data.user.role)){
+   await fetcher(c.url+'/auth/v1/logout',{method:'POST',headers:{apikey:c.key,Authorization:'Bearer '+next.access_token},redirect:'manual',signal:AbortSignal.timeout(15000)}).catch(()=>{});
+   fail('ثبت رمز هنوز تأیید نشده؛ دوباره با رمز تازه وارد شوید.',403,'PASSWORD_CHANGE_NOT_VERIFIED');
+  }
+  return json({...verified.data,ok:true,passwordChangeRequired:false,portal:verified.data.user.role==='customer'?'client':'team'},200,sessionCookies(next,secure));
+ }
  if(audioFileId&&result.response.ok)return await streamAudio({request,c,id:audioFileId,result,updated,fetcher,range});
  if(path==='/voice/audio'&&request.method==='POST'&&result.response.ok){signedAudio(result.data,c,body.id);return json({url:'/api/voice/audio/file/'+body.id,expiresAt:result.data.expiresAt,mimeType:result.data.mimeType,fileName:result.data.fileName},result.response.status,updated);}
+ // Native Auth sessions are consumed only by the explicit login/password
+ // handlers above. A new or aliased Edge route cannot expose bearer tokens.
+ if(result.data&&typeof result.data==='object'&&('access_token' in result.data||'refresh_token' in result.data))fail('پاسخ ورود تأیید نشد؛ دوباره وارد شوید.',502,'UNEXPECTED_SESSION_RESPONSE');
  return json(result.data,result.response.status,updated);
  }catch(error){return json({error:error.status?error.message:'درخواست انجام نشد؛ دوباره تلاش کنید.',code:error.code||'INTERNAL_ERROR'},error.status||500);}};}

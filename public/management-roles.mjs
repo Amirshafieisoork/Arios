@@ -13,7 +13,8 @@ export function managementRoleDetails(state,userOrId){
   const user=list(state?.users).find(person=>person.id===id);
   if(!activeManager(user))return {};
   const primary=primaryManager(state),managementRole=primary?.id===user.id?'primary':'technical';
-  return {managementRole,managementTitle:managementRole==='primary'?'مدیر اصلی':'مدیر فنی'};
+  const jobTitle=typeof user.managementTitle==='string'&&user.managementTitle.trim().length<=80?user.managementTitle.trim():'';
+  return {managementRole,managementTitle:managementRole==='primary'?'مدیر اصلی':jobTitle||'مدیر فنی'};
 }
 export function managementRoleSnapshot(state,userOrId){
   const id=typeof userOrId==='string'?userOrId:userOrId?.id,user=list(state?.users).find(person=>person.id===id);

@@ -82,3 +82,38 @@ test('directory displays unambiguous unified actions and encodes person links an
 test('shared people validation uses identical source for browser and edge',async()=>{
   assert.equal(await readFile(new URL('../public/people-profile.mjs',import.meta.url),'utf8'),await readFile(new URL('../supabase/functions/arios-api/people-profile.mjs',import.meta.url),'utf8'));
 });
+
+test('personnel codes preserve leading zeros and normalize digits for every role without changing access',()=>{
+  for(const role of ['manager','worker','warehouse','accountant','customer']){
+    const person={id:'person',role,name:'همکار'};
+    applyPersonProfile(person,{personnelCode:' ۰۰۱۰۰۶ '});
+    assert.equal(person.personnelCode,'001006');assert.equal(person.role,role);
+    applyPersonProfile(person,{personnelCode:'',personDetails:{}});
+    assert.equal(person.personnelCode,'');assert.equal(person.role,role);
+  }
+});
+
+test('malformed personnel codes and invalid combined details never partially change a person',()=>{
+  for(const personnelCode of [100006,null,'<script>','ABC 123','A'.repeat(41)]){
+    const person={id:'person',role:'worker',personnelCode:'old'},before=structuredClone(person);
+    assert.throws(()=>applyPersonProfile(person,{personnelCode}),error=>error.code==='INVALID_PERSON_DETAILS');
+    assert.deepEqual(person,before);
+  }
+  const person={id:'person',role:'worker',personnelCode:'old'},before=structuredClone(person);
+  assert.throws(()=>applyPersonProfile(person,{personnelCode:'100006',personDetails:{workStart:'17:00',workEnd:'09:00'}}));
+  assert.deepEqual(person,before);
+});
+
+test('manager can edit and view a personnel code in the unified person form and scoped snapshot',()=>{
+  const state=createSeedState();
+  applyAction(state,'manager','account.update',{id:'worker',personnelCode:'۱۰۰۰۰۶'});
+  const snapshot=publicState(state,'manager'),person=snapshot.users.find(user=>user.id==='worker');
+  assert.equal(person.personnelCode,'100006');
+  assert.equal(publicState(state,'worker').user.personnelCode,'100006');
+  assert.match(renderPersonDetailsFields(snapshot,ctx,person),/name="personnelCode"[^>]+value="100006"/);
+  assert.match(renderPeopleWorkspace(snapshot,ctx,{supabaseAuth:true}),/کد پرسنلی<\/dt><dd><bdi dir="ltr">100006/);
+  const data=new FormData();data.set('role','warehouse');data.set('personnelCode','100006');
+  assert.equal(personProfilePayload(data).personnelCode,'100006');
+  assert.equal(personProfilePayload(data).personDetails,undefined);
+  assert.throws(()=>applyAction(state,'worker','account.update',{id:'worker',personnelCode:'manager'}),error=>error.status===403);
+});

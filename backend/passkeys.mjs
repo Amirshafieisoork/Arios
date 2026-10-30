@@ -84,6 +84,7 @@ export async function handlePasskeys({path,request,c,saved,secure,fetcher,env,he
       if(!result||result.response.status===401)updated.push(...clearCookies(secure));
       error('برای مدیریت ورود امن، با حساب فعال خود وارد شوید.',result?.response.status===403?403:401,result?.data?.code||'UNAUTHORIZED');
     }
+    if(result.data.passwordChangeRequired===true||result.data.user.passwordChangeRequired===true)error('ابتدا رمز اولیهٔ حساب را تغییر دهید؛ سپس ورود با اثر انگشت را فعال کنید.',403,'PASSWORD_CHANGE_REQUIRED');
     return {token,user:result.data.user};
   };
   try{

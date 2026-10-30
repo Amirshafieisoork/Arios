@@ -1,6 +1,8 @@
 import {mountPasskeyLogin,offerPasskeySetupAfterLogin} from './passkey-client.mjs';
 import {mountPasswordRecovery} from './recovery.mjs';
 import {landingPage} from './portal-access.mjs';
+import './install.mjs';
+import {mountPasswordOnboarding} from './password-onboarding.mjs';
 const portal=location.pathname.replace(/\/+$/,'').endsWith('/client')?'client':'team';
 const client=portal==='client';
 const setupPasskey=new URLSearchParams(location.search).get('setup')==='passkey';
@@ -24,6 +26,12 @@ const toggle=document.querySelector('[data-password-toggle]');
 toggle.addEventListener('click',()=>{const shown=password.type==='password';password.type=shown?'text':'password';toggle.setAttribute('aria-pressed',String(shown));toggle.setAttribute('aria-label',shown?'پنهان کردن رمز عبور':'نمایش رمز عبور');password.focus();});
 const messages={INVALID_CREDENTIALS:'شماره تماس یا رمز عبور درست نیست. دوباره بررسی کنید.',UNAUTHORIZED:'شماره تماس یا رمز عبور درست نیست. دوباره بررسی کنید.',INVALID_LOGIN:'شماره تماس یا رمز عبور درست نیست. دوباره بررسی کنید.',EMAIL_NOT_CONFIRMED:'حساب شما هنوز تأیید نشده است. با مدیر آریوس هماهنگ کنید.',NOT_A_MEMBER:'این حساب هنوز به فضای کار آریوس اضافه نشده است.',FORBIDDEN:'این حساب اجازهٔ ورود به پنل انتخاب‌شده را ندارد.',PORTAL_FORBIDDEN:'این حساب اجازهٔ ورود به پنل انتخاب‌شده را ندارد.',WRONG_PORTAL:'از صفحهٔ ورود متناسب با نقش حسابتان استفاده کنید.',RATE_LIMITED:'تلاش‌های ورود زیاد شده است. کمی بعد دوباره امتحان کنید.'};
 const form=document.querySelector('#login-form');
+async function enterPanel(data){
+ const destination=data.portal==='client'||data.portal==='team'?data.portal:data.user.role==='customer'?'client':'team';
+ if(setupPasskey||passkeyChoice?.checked)await offerPasskeySetupAfterLogin({force:true});
+ location.assign('/portal/?portal='+destination+'#'+destinationPage(data.user.role));
+}
+const onboarding=mountPasswordOnboarding({onComplete:enterPanel,onLogout:()=>location.replace('/login/'+portal)});
 form.addEventListener('submit',async event=>{
  event.preventDefault();const error=document.querySelector('#login-error'),button=form.querySelector('[type="submit"]'),label=document.querySelector('[data-submit-label]');
  error.hidden=true;error.textContent='';button.disabled=true;label.textContent='در حال ورود…';
@@ -33,10 +41,12 @@ form.addEventListener('submit',async event=>{
   if(!response.ok){const raw=typeof data.error==='string'?data.error:data.error?.message;throw new Error(messages[data.code]||(response.status===429?messages.RATE_LIMITED:raw||'ورود انجام نشد. اطلاعات حساب را بررسی کنید.'));}
   if(!data.user)throw new Error('ورود تأیید نشد. لطفاً دوباره امتحان کنید.');
   if(!['manager','worker','customer','warehouse','accountant'].includes(data.user.role))throw new Error('دسترسی حساب شما هنوز آماده نیست. با مدیر آریوس هماهنگ کنید.');
-  const destination=data.portal==='client'||data.portal==='team'?data.portal:data.user.role==='customer'?'client':'team';
-  password.value='';label.textContent='ورود انجام شد';if(setupPasskey||passkeyChoice?.checked)await offerPasskeySetupAfterLogin({force:true});location.assign('/portal/?portal='+destination+'#'+destinationPage(data.user.role));
+  const temporaryPassword=password.value;password.value='';label.textContent='ورود انجام شد';
+  if(onboarding.show(data,{temporaryPassword}))return;
+  await enterPanel(data);
  }catch(err){error.textContent=err instanceof TypeError?'ارتباط برقرار نشد. اتصال اینترنت را بررسی و دوباره امتحان کنید.':err.message||'ورود انجام نشد.';error.hidden=false;button.disabled=false;label.textContent=client?'ورود به پنل مشتریان':'ورود به فضای کار';}
 });
 
-mountPasskeyLogin({portal,onSuccess:data=>{const destination=data.portal==='client'||data.portal==='team'?data.portal:data.user.role==='customer'?'client':'team';password.value='';location.assign('/portal/?portal='+destination+'#'+destinationPage(data.user.role));}});
+mountPasskeyLogin({portal,onSuccess:async data=>{password.value='';if(onboarding.show(data))return;await enterPanel(data);}});
 mountPasswordRecovery();
+void onboarding.resume();

@@ -5,11 +5,18 @@
   "description": "پروژه‌ها، برنامهٔ کارها و گزارش‌های آریوس در یک فضای یکپارچه.",
   "lang": "fa-IR",
   "dir": "rtl",
-  "start_url": "/",
+  "start_url": "/?source=app",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f2ecdf",
-  "theme_color": "#f2ecdf",
+  "display_override": ["standalone"],
+  "background_color": "#17292d",
+  "theme_color": "#17292d",
+  "prefer_related_applications": false,
+  "orientation": "any",
+  "shortcuts": [
+    {"name":"پنل همکاران","short_name":"همکاران","url":"/login/team","icons":[{"src":"/assets/brand/app-icon-navy-gold-192.png","sizes":"192x192","type":"image/png"}]},
+    {"name":"پنل مشتریان","short_name":"مشتریان","url":"/login/client","icons":[{"src":"/assets/brand/app-icon-navy-gold-192.png","sizes":"192x192","type":"image/png"}]}
+  ],
   "categories": [
     "business",
     "productivity"

@@ -1,6 +1,6 @@
 import { applyAction } from './domain.mjs';
 import { applyPersonProfile } from './people-profile.mjs';
-import { normalizePhone, normalizeUsername, loginIdentity, phoneAuthEmail, internalAuthEmail } from './identity.mjs';
+import { normalizePhone, normalizeUsername, loginIdentity, phoneAuthEmail, internalAuthEmail, latinDigits } from './identity.mjs';
 import { applyPrimaryManagerTransfer, primaryTransferCompleted, managementRoleDetails } from './management-roles.mjs';
 /** Authentication is resolved from Supabase Auth and private profiles only. */
 export class APIError extends Error {
@@ -9,7 +9,7 @@ export class APIError extends Error {
   }
 }
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
-export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'deletedAt', 'managementRole', 'managementTitle'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
+export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'deletedAt', 'managementRole', 'managementTitle', 'passwordChangeRequired'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
 export function text(value, label, max = 4000) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) fail(`${label} معتبر نیست.`);
   return value.trim();
@@ -54,7 +54,8 @@ export async function authenticate(request, client, repo) {
   const user = loaded.state.users.find(user => user.id === profile.domain_user_id);
   if (!user || user.deletedAt || user.role !== profile.role) fail('دسترسی حساب نیازمند بررسی مدیر است.', 403, 'PROFILE_MISMATCH');
   await verifySessionSecurity(repo, user.id, response.data.user.id, match[1]);
-  return { user: {...user,...managementRoleDetails(loaded.state,user)}, authUser: response.data.user, state: loaded.state, revision: loaded.revision };
+  const passwordChangeRequired = (await repo.getSetting?.(`auth-onboarding:${user.id}`))?.required === true;
+  return { user: {...user,...managementRoleDetails(loaded.state,user),passwordChangeRequired}, authUser: response.data.user, state: loaded.state, revision: loaded.revision };
 }
 
 export function emptyState(email) {
@@ -157,13 +158,18 @@ function accountInState(state, actorId, payload, domainUserId) {
 
 export async function createAccount(client, repo, actor, payload) {
   manager(actor);
-  await rate(repo, `account-create:${actor.id}`, 10);
+  await rate(repo, `account-create:${actor.id}`, 30);
+  validatePasswordRequirement(payload);
   const password = passwordValue(payload.password);
   const loaded = await repo.loadState();
   if (!loaded) fail('فضای کار آماده نیست.', 503, 'STATE_NOT_INITIALIZED');
   const domainUserId = `u_${crypto.randomUUID()}`;
   // Validate every domain field before creating an external Auth account.
   const candidate = accountInState(structuredClone(loaded.state), actor.id, payload, domainUserId);
+  // This private gate must exist before the public profile is committed. A
+  // user who knows their temporary password cannot race the import to access
+  // business data or register an unrelated Passkey before changing it.
+  if (payload.requirePasswordChange === true) await markPasswordChangeRequired(repo,domainUserId);
   // Contact numbers can change or be reused. Keep the private Auth identity
   // immutable so a previous phone alias cannot reserve that number forever.
   const authUser = await createAuthUser(client, { email: candidate.email || `account.${domainUserId.slice(2)}@phone.arios.invalid`, name: candidate.name, phone: candidate.phone, password });
@@ -287,9 +293,11 @@ export async function passwordLogin({ client, repo, payload, authUrl, authKey, f
     if (existing.error || !existing.data?.user?.email) fail('شماره تماس یا رمز عبور درست نیست.', 401, 'INVALID_CREDENTIALS');
     email = existing.data.user.email;
   }
+  const required = user && (await repo.getSetting?.(`auth-onboarding:${user.id}`))?.required === true;
+  const password = initialPhonePassword(payload.password,user,required);
   let response;
   try {
-    response = await fetcher(target.origin + '/auth/v1/token?grant_type=password', { method: 'POST', headers: { apikey: authKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: payload.password }), redirect: 'manual', signal: AbortSignal.timeout(20000) });
+    response = await fetcher(target.origin + '/auth/v1/token?grant_type=password', { method: 'POST', headers: { apikey: authKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }), redirect: 'manual', signal: AbortSignal.timeout(20000) });
   } catch { fail('ارتباط با سرویس ورود برقرار نشد.', 502, 'AUTH_UNAVAILABLE'); }
   const result = await authResponseJSON(response);
   if (response.status === 429) fail('تعداد تلاش‌های ورود زیاد است؛ کمی بعد تلاش کنید.', 429, 'RATE_LIMITED');
@@ -335,6 +343,7 @@ async function withPrivateLock(repo, name, callback) {
 /** Add an explicitly requested login to an existing record, preserving its id. */
 export async function activateAccount(client, repo, actor, payload) {
   manager(actor);
+  validatePasswordRequirement(payload);
   await rate(repo, `account-activate:${actor.id}`, 10);
   const id = text(payload.id, 'شناسه حساب', 120), password = passwordValue(payload.password);
   let phone;
@@ -359,6 +368,7 @@ export async function activateAccount(client, repo, actor, payload) {
     };
     let loaded = await repo.loadState();
     const preview = await candidate(loaded);
+    if (payload.requirePasswordChange === true) await markPasswordChangeRequired(repo,id);
     // A legacy contact email is not proof of ownership of an existing Auth
     // identity. Create a fresh private alias rather than taking over that email.
     const authUser = await createAuthUser(client, {
@@ -450,6 +460,7 @@ export async function listPasswordResetRequests(repo, actor) {
 
 export async function resetAccountPassword(client, repo, actor, payload) {
   manager(actor);
+  validatePasswordRequirement(payload);
   await rate(repo, `password-reset:${actor.id}`, 10);
   const id = text(payload.id, 'شناسه حساب', 120), password = passwordValue(payload.password);
   return withPrivateLock(repo, `account-security:${id}`, async () => {
@@ -460,6 +471,7 @@ export async function resetAccountPassword(client, repo, actor, payload) {
     if (!profile) fail('این پرونده هنوز حساب ورود ندارد؛ ابتدا «فعال‌سازی ورود» را برای همان فرد انجام دهید.', 409, 'ACCOUNT_NEEDS_ACTIVATION');
     if (profile.role !== user.role) fail('نقش حساب ورود با پرونده هماهنگ نیست؛ اطلاعات و نقش همین حساب را یک‌بار ذخیره کنید و سپس رمز را بازنشانی کنید.', 409, 'ACCOUNT_PROFILE_MISMATCH');
     const securityKey = `auth-security:${id}`, previousSecurity = await repo.getSetting(securityKey);
+    if (payload.requirePasswordChange === true) await markPasswordChangeRequired(repo,id);
     // Keep the block durable until the final cutoff is saved. A timed unblock
     // could otherwise admit a session created while the password was changing.
     // The owner-manager is protected above and can retry an interrupted reset.
@@ -483,5 +495,84 @@ export async function resetAccountPassword(client, repo, actor, payload) {
       if (Array.isArray(requests)) await repo.setSetting(RESET_REQUESTS, requests.map(item => item.status === 'pending' && item.userId === id ? { ...item, status: 'resolved', resolvedAt: new Date().toISOString(), resolvedBy: actor.id } : item).slice(-100));
     });
     return { result: { id, ok: true, sessionsRevoked: true }, state: loaded.state };
+  });
+}
+
+function validatePasswordRequirement(payload) {
+  if (payload.requirePasswordChange !== undefined && typeof payload.requirePasswordChange !== 'boolean') fail('وضعیت تغییر رمز معتبر نیست.');
+}
+
+function initialPhonePassword(value,person,required) {
+  if (!required || !person?.phone || !/[۰-۹٠-٩]/.test(value)) return value;
+  try { return normalizePhone(value) === normalizePhone(person.phone) ? latinDigits(value) : value; }
+  catch { return value; }
+}
+
+/** Private onboarding state never comes from editable Auth user_metadata. */
+export async function markPasswordChangeRequired(repo, userId, { reason = 'initial-password' } = {}) {
+  const key = `auth-onboarding:${userId}`, previous = await repo.getSetting?.(key);
+  const value = { required: true, requiredAt: new Date().toISOString(), reason, version: (Number.isSafeInteger(previous?.version) ? previous.version : 0) + 1 };
+  await repo.setSetting(key, value);
+  return value;
+}
+
+/** Change only the authenticated person's password. Fresh native sessions stay
+ * server-side until the BFF installs new HttpOnly cookies. */
+export async function changeOwnPassword({ client, repo, user, authUser, payload, authUrl, authKey, fetcher = fetch }) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).some(key => !['currentPassword','newPassword'].includes(key))) fail('اطلاعات تغییر رمز معتبر نیست.');
+  let currentPassword = passwordValue(payload.currentPassword);
+  const newPassword = passwordValue(payload.newPassword);
+  if (!newPassword.trim() || newPassword === currentPassword) fail('یک رمز تازه و متفاوت از رمز فعلی انتخاب کنید.',400,'PASSWORD_UNCHANGED');
+  try { if (user?.phone && normalizePhone(newPassword) === normalizePhone(user.phone)) fail('رمز تازه نباید شمارهٔ تماس شما باشد.',400,'PASSWORD_IS_PHONE'); }
+  catch (error) { if (error?.code === 'PASSWORD_IS_PHONE') throw error; }
+  let url;
+  try { url = new URL(authUrl); } catch { fail('سرویس ورود آماده نیست.',503,'AUTH_UNAVAILABLE'); }
+  if (url.protocol !== 'https:' || !url.hostname.endsWith('.supabase.co') || url.pathname !== '/' || !authKey) fail('سرویس ورود آماده نیست.',503,'AUTH_UNAVAILABLE');
+  await rate(repo,`password-change:${user.id}`,6,60000);
+  return withPrivateLock(repo,`account-security:${user.id}`,async () => {
+    const loaded = await repo.loadState(), current = loaded?.state?.users?.find(person => person.id === user.id), profile = await repo.getProfileByDomainId(user.id);
+    if (!current || current.deletedAt || current.role !== user.role || !profile || profile.auth_user_id !== authUser?.id || profile.role !== current.role) fail('دسترسی حساب تغییر کرده است؛ دوباره وارد شوید.',403,'PROFILE_MISMATCH');
+    if (typeof authUser.email !== 'string' || !authUser.email) fail('حساب ورود نیازمند بررسی مدیر است.',503,'AUTH_UNAVAILABLE');
+    currentPassword = initialPhonePassword(currentPassword,current,(await repo.getSetting(`auth-onboarding:${user.id}`))?.required===true);
+    const native = async (path,{method='POST',body,token,allowFailure=false}={}) => {
+      let response;
+      try { response = await fetcher(url.origin+'/auth/v1/'+path,{method,headers:{apikey:authKey,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{}),redirect:'manual',signal:AbortSignal.timeout(20000)}); }
+      catch { fail('پاسخ تغییر رمز قطعی نشد؛ با رمز جدید ورود را امتحان کنید و در صورت نیاز دوباره تغییر رمز را انجام دهید.',503,'PASSWORD_CHANGE_PENDING'); }
+      if (response.status>=300&&response.status<400) fail('پاسخ سرویس ورود معتبر نیست.',502,'AUTH_REDIRECT_BLOCKED');
+      const data = await authResponseJSON(response);
+      if (!allowFailure && !response.ok) {
+        if (response.status===429) fail('تعداد تلاش‌های تغییر رمز زیاد است؛ کمی بعد تلاش کنید.',429,'RATE_LIMITED');
+        if (response.status>=500) fail('سرویس تغییر رمز موقتاً در دسترس نیست؛ دوباره تلاش کنید.',503,'AUTH_UNAVAILABLE');
+        fail(path.startsWith('token?')?'رمز فعلی درست نیست.':'رمز تازه پذیرفته نشد؛ یک رمز دیگر انتخاب کنید.',400,path.startsWith('token?')?'CURRENT_PASSWORD_INVALID':'PASSWORD_CHANGE_REJECTED');
+      }
+      return {response,data};
+    };
+    // A separate native proof validates the supplied current password even if
+    // the project's optional current-password enforcement is disabled.
+    const proof = (await native('token?grant_type=password',{body:{email:authUser.email,password:currentPassword}})).data;
+    if (proof.user?.id!==authUser.id || typeof proof.access_token!=='string' || !proof.access_token || typeof proof.refresh_token!=='string' || !proof.refresh_token) fail('رمز فعلی یا حساب ورود معتبر نیست.',400,'CURRENT_PASSWORD_INVALID');
+    try {
+    const updated = (await native('user',{method:'PUT',token:proof.access_token,body:{password:newPassword,current_password:currentPassword}})).data;
+    if (updated.id!==authUser.id && updated.user?.id!==authUser.id) fail('نتیجهٔ تغییر رمز هنوز قابل تأیید نیست؛ دوباره وارد شوید.',503,'PASSWORD_CHANGE_PENDING');
+
+    // The cutoff also denies previously issued JWTs and refreshed old session
+    // ids, even if the provider cannot immediately acknowledge global logout.
+    const previousSecurity = await repo.getSetting(`auth-security:${user.id}`), validAfter = new Date().toISOString();
+    await repo.setSetting(`auth-security:${user.id}`,{...previousSecurity,blocked:true,validAfter});
+    try { await native('logout?scope=global',{token:proof.access_token,allowFailure:true}); } catch {}
+    await repo.setSetting(`auth-security:${user.id}`,{...previousSecurity,blocked:false,validAfter});
+    const fresh = (await native('token?grant_type=password',{body:{email:authUser.email,password:newPassword}})).data;
+    if (fresh.user?.id!==authUser.id || typeof fresh.access_token!=='string' || !fresh.access_token || typeof fresh.refresh_token!=='string' || !fresh.refresh_token) fail('رمز تغییر کرد؛ برای ادامه با رمز تازه وارد شوید.',503,'PASSWORD_CHANGE_PENDING');
+    await verifySessionSecurity(repo,user.id,authUser.id,fresh.access_token);
+    const finalLoaded = await repo.loadState(), finalUser = finalLoaded?.state?.users?.find(person=>person.id===user.id), finalProfile = await repo.getProfileByDomainId(user.id);
+    if (!finalUser || finalUser.deletedAt || finalProfile?.auth_user_id!==authUser.id || finalProfile.role!==finalUser.role) fail('دسترسی حساب تغییر کرده است؛ برای ادامه دوباره وارد شوید.',403,'PROFILE_MISMATCH');
+    const key=`auth-onboarding:${user.id}`, previous = await repo.getSetting(key);
+    await repo.setSetting(key,{...previous,required:false,changedAt:new Date().toISOString(),version:(Number.isSafeInteger(previous?.version)?previous.version:0)+1});
+    return {ok:true,passwordChangeRequired:false,sessionsRevoked:true,user:safeUser({...finalUser,passwordChangeRequired:false}),access_token:fresh.access_token,refresh_token:fresh.refresh_token,expires_in:fresh.expires_in};
+    } finally {
+      // The proof token is never exposed, and should not leave a spare session
+      // behind when password validation or the provider's update is rejected.
+      try { await fetcher(url.origin+'/auth/v1/logout?scope=local',{method:'POST',headers:{apikey:authKey,Authorization:'Bearer '+proof.access_token},redirect:'manual',signal:AbortSignal.timeout(5000)}); } catch {}
+    }
   });
 }

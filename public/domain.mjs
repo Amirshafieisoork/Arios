@@ -146,7 +146,7 @@ function audit(state, actor, action, entity, description) {
   state.audit.push({ id: id('a'), actorId: actor.id, action, entityId: entity.id, createdAt: now(), description });
 }
 function safeUser(user, includeRates = false) {
-  const result = pick(user, ['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'deletedAt']);
+  const result = pick(user, ['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'deletedAt']);
   if (internalAuthEmail(result.email)) delete result.email;
   if (includeRates) Object.assign(result, pick(user, ['hourlyRate', 'rateHistory']));
   return result;

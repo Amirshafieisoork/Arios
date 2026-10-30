@@ -7,6 +7,14 @@ import {workspaceState} from '../supabase/functions/arios-api/account-state.mjs'
 import {createRepository} from '../supabase/functions/arios-api/repository.mjs';
 import {renderManagementRoleSettings,wireManagementRoleSettings} from '../public/management-role-settings.mjs';
 const owner={id:'manager',role:'manager'};
+test('executive title for an additional manager does not change primary ownership',()=>{
+  const state=createSeedState();
+  state.users.push({id:'executive',name:'مدیرعامل',role:'manager',managementTitle:'مدیرعامل'});
+  assert.equal(managementRoleDetails(state,'executive').managementTitle,'مدیرعامل');
+  assert.equal(primaryManager(state).id,'manager');
+  assert.equal(managementRoleSnapshot(state,'executive').canTransferPrimary,false);
+  assert.equal(managementRoleSnapshot(state,'manager').canTransferPrimary,true);
+});
 const payload=(id='worker',extra={})=>({id,expectedPrimaryManagerId:'manager',expectedVersion:0,requestId:'primary-transfer-request-0001',...extra});
 function fixture(initial=createSeedState()){
   let state=structuredClone(initial),revision=7;

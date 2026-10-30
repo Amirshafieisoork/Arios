@@ -167,3 +167,13 @@ test('native actionable enrollment failures stay specific without leaking provid
     assert.equal(r.status,status);assert.equal(r.data.code,expected);assert(!JSON.stringify(r.data).includes('private-debug-details'));
   }
 });
+
+test('a server-owned first-password requirement blocks all passkey management before native credential access',async()=>{
+  for(const topLevel of [true,false]){
+    const f=fixture(c=>{assert.equal(c.path,'/functions/v1/arios-api/session');const value=session();if(topLevel)value.passwordChangeRequired=true;else value.user.passwordChangeRequired=true;return json(value);});
+    for(const path of ['/api/passkeys','/api/passkeys/register/options','/api/passkeys/register/verify','/api/passkeys/rename','/api/passkeys/remove']){
+      const r=await f.call(path,{method:path==='/api/passkeys'?'GET':'POST',cookie:'arios_access=temporary-login'});assert.equal(r.status,403);assert.equal(r.data.code,'PASSWORD_CHANGE_REQUIRED');
+    }
+    assert(f.calls.every(c=>c.path==='/functions/v1/arios-api/session'));
+  }
+});

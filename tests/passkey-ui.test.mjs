@@ -155,3 +155,29 @@ test('canonical setup handoff preserves explicit activation intent and normal pa
   assert(html.includes('id="login-enable-passkey"'));
   assert(!html.includes('id="login-enable-passkey" checked'));
 });
+
+test('same-device recovery remains discoverable and verified, while default creation can still use another provider',()=>{
+  const regular=creationOptionsFromJSON(creation,fakeScope()),local=creationOptionsFromJSON(creation,fakeScope(),{preferLocal:true});
+  assert.equal(regular.authenticatorSelection.authenticatorAttachment,undefined);
+  assert.equal(local.authenticatorSelection.authenticatorAttachment,'platform');
+  for(const options of [regular,local]){assert.equal(options.authenticatorSelection.residentKey,'required');assert.equal(options.authenticatorSelection.userVerification,'required');assert.deepEqual(options.hints,['client-device']);}
+  assert.match(passkeyDeviceHelp(fakeScope({navigator:{userAgent:'Android'}})),/رمز آریوس.*PIN/);
+  assert.match(passkeyMessage({code:'PASSWORD_CHANGE_REQUIRED'}),/رمز اولیه/);
+});
+
+test('registration progress distinguishes local credential creation from server persistence and carries cancellation',async()=>{
+  const events=[],controller=new AbortController();let resolveCreate;
+  const scope=fakeScope({create:options=>{events.push('browser-create');assert.equal(options.signal,controller.signal);assert.equal(options.publicKey.authenticatorSelection.authenticatorAttachment,'platform');return new Promise(resolve=>resolveCreate=resolve);}});
+  const pending=registerPasskey({scope,start:options(creation),preferLocal:true,signal:controller.signal,onStage:stage=>events.push(stage),fetcher:async url=>{events.push(url);return json({passkey:{id:'saved'}});}});
+  assert.deepEqual(events,['device','browser-create']);resolveCreate(credential());await pending;
+  assert.deepEqual(events,['device','browser-create','verifying','/api/passkeys/register/verify']);
+});
+
+test('near-expired login is prepared again without losing Safari activation to a late network await',async()=>{
+  const button=element(),status=element(),calls=[],events=[];let issued=0;
+  const scope=fakeScope({document:{querySelector:selector=>({'[data-passkey-login]':button,'[data-passkey-login-status]':status}[selector])},get:async()=>{events.push('get');return credential('authentication');}});
+  mountPasskeyLogin({scope,onSuccess:()=>events.push('success'),fetcher:async url=>{calls.push(url);if(url.endsWith('/status'))return json({enabled:true,domainSupported:true});if(url.endsWith('/options'))return json({...options({challenge}),expires_at:Math.floor(Date.now()/1000)+(issued++===0?2:120)});return json({user:{role:'worker'},portal:'team'});}});
+  await flush();assert.equal(button.disabled,false);await button.events.click();assert.deepEqual(events,[]);assert.match(status.textContent,/دوباره دکمه/);assert.equal(button.disabled,false);
+  const clicked=button.events.click();assert.deepEqual(events,['get']);await clicked;assert.deepEqual(events,['get','success']);
+  assert.equal(calls.filter(url=>url.endsWith('/login/verify')).length,1);
+});
