@@ -131,9 +131,17 @@ function accountInState(state, actorId, payload, domainUserId) {
   if (!phone && !email && !username) fail('شماره تماس را وارد کنید.');
   if (!['worker', 'customer', 'warehouse', 'accountant'].includes(payload.role)) fail('نقش حساب معتبر نیست.');
   if (payload.role === 'warehouse' && !username) fail('برای انباردار نام کاربری جداگانه وارد کنید.');
-  const identityMatch = state.users.find(user => (phone && user.phone && normalizePhone(user.phone) === phone) || (username && user.username && normalizeUsername(user.username) === username) || (email && user.email?.toLowerCase() === email));
+  const identityMatch = state.users.find(user => {
+    // Legacy contact-only records may intentionally retain an uncorrected
+    // number. Ignore that one malformed field, while still matching the same
+    // person's username or email independently.
+    let phoneMatch = false, usernameMatch = false;
+    try { phoneMatch = Boolean(phone && user.phone && normalizePhone(user.phone) === phone); } catch {}
+    try { usernameMatch = Boolean(username && user.username && normalizeUsername(user.username) === username); } catch {}
+    return phoneMatch || usernameMatch || Boolean(email && user.email?.toLowerCase() === email);
+  });
   if (identityMatch?.deletedAt) fail('این حساب بایگانی شده است؛ مدیر می‌تواند همان حساب را بازیابی کند.', 409, 'ACCOUNT_ARCHIVED');
-  if (username && state.users.some(user => user.username && normalizeUsername(user.username) === username)) fail('این نام کاربری قبلاً ثبت شده است.', 409, 'DUPLICATE_USERNAME');
+  if (username && state.users.some(user => { try { return user.username && normalizeUsername(user.username) === username; } catch { return false; } })) fail('این نام کاربری قبلاً ثبت شده است.', 409, 'DUPLICATE_USERNAME');
   if (phone && state.users.some(user => { try { return user.phone && normalizePhone(user.phone) === phone; } catch { return false; } })) fail('این شماره قبلاً ثبت شده است؛ نقش و اطلاعات همان حساب را ویرایش کنید.', 409, 'DUPLICATE_PHONE');
   if (email && state.users.some(user => user.email?.toLowerCase() === email)) fail('این ایمیل قبلاً در فضای کار ثبت شده است؛ همان حساب را ویرایش کنید.', 409, 'DUPLICATE_EMAIL');
   const projectIds = payload.projectIds ?? [];

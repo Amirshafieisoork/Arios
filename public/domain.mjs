@@ -518,8 +518,8 @@ export function applyAction(state, userId, action, payload = {}) {
     if (action === 'account.archive') {
       person.deletedAt ||= now();
     } else {
-      if (person.phone && draft.users.some(other => other.id !== person.id && !other.deletedAt && other.phone && normalizePhone(other.phone) === normalizePhone(person.phone))) fail('شماره تماس برای حساب فعال دیگری ثبت شده است.', 409, 'DUPLICATE_PHONE');
-      if (person.username && draft.users.some(other => other.id !== person.id && !other.deletedAt && other.username && normalizeUsername(other.username) === normalizeUsername(person.username))) fail('نام کاربری برای حساب فعال دیگری ثبت شده است.', 409, 'DUPLICATE_USERNAME');
+      if (person.phone && draft.users.some(other => { try { return other.id !== person.id && !other.deletedAt && other.phone && normalizePhone(other.phone) === normalizePhone(person.phone); } catch { return false; } })) fail('شماره تماس برای حساب فعال دیگری ثبت شده است.', 409, 'DUPLICATE_PHONE');
+      if (person.username && draft.users.some(other => { try { return other.id !== person.id && !other.deletedAt && other.username && normalizeUsername(other.username) === normalizeUsername(person.username); } catch { return false; } })) fail('نام کاربری برای حساب فعال دیگری ثبت شده است.', 409, 'DUPLICATE_USERNAME');
       delete person.deletedAt;
     }
     result = safeUser(person, true);
