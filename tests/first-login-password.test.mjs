@@ -10,15 +10,15 @@ const {createHandler}=await import('data:text/javascript;base64,'+Buffer.from(bu
 const AUTH_ID='11111111-1111-4111-8111-111111111111',OLD_SESSION='22222222-2222-4222-8222-222222222222',PROOF_SESSION='33333333-3333-4333-8333-333333333333',NEW_SESSION='44444444-4444-4444-8444-444444444444';
 const jwt=session=>'e30.'+Buffer.from(JSON.stringify({session_id:session})).toString('base64url')+'.signature';
 const JSONResponse=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}});
-function fixture(){
- const state=createSeedState(),user=state.users.find(u=>u.id==='worker');user.phone='+989121234567';
+function fixture({phone='+989121234567',initialPassword='09121234567'}={}){
+ const state=createSeedState(),user=state.users.find(u=>u.id==='worker');user.phone=phone;
  const settings=new Map([['auth-onboarding:worker',{required:true,version:1,reason:'roster-import'}]]),calls=[],locks=new Map(),sessions=new Map([[OLD_SESSION,'2000-01-01T00:00:00.000Z']]);
  const profile={auth_user_id:AUTH_ID,domain_user_id:'worker',role:'worker'},authUser={id:AUTH_ID,email:'account.worker@phone.arios.invalid',user_metadata:{passwordChangeRequired:false}};
  const repo={loadState:async()=>({state:structuredClone(state),revision:1}),getProfile:async id=>id===AUTH_ID?structuredClone(profile):null,getProfileByDomainId:async id=>id==='worker'?structuredClone(profile):null,getSetting:async key=>structuredClone(settings.get(key)??null),setSetting:async(key,value)=>{settings.set(key,structuredClone(value));},deleteSetting:async key=>settings.delete(key),rateLimit:async()=>({allowed:true}),acquireLock:async(name,token)=>{if(locks.has(name))return false;locks.set(name,token);return true;},releaseLock:async(name,token)=>{if(locks.get(name)===token)locks.delete(name);},authSessionValid:async(id,session,after)=>id===AUTH_ID&&sessions.has(session)&&Date.parse(sessions.get(session))>Date.parse(after)};
  const client={auth:{getUser:async token=>({data:{user:authUser}})}};
- let password='09121234567';
+ let password=initialPassword;
  const fetcher=async(url,options={})=>{const body=options.body?JSON.parse(options.body):undefined;calls.push({url,method:options.method,body});assert.equal(options.redirect,'manual');assert.equal(options.headers.apikey,'server-test-key');
-  if(url.endsWith('/token?grant_type=password')){assert.equal(body.email,authUser.email);if(body.password!==password)return JSONResponse({error_code:'invalid_credentials'},400);const id=body.password==='09121234567'?PROOF_SESSION:NEW_SESSION;sessions.set(id,new Date(Date.now()+1).toISOString());return JSONResponse({user:authUser,access_token:jwt(id),refresh_token:'private-refresh-'+id,expires_in:3600});}
+  if(url.endsWith('/token?grant_type=password')){assert.equal(body.email,authUser.email);if(body.password!==password)return JSONResponse({error_code:'invalid_credentials'},400);const id=body.password===initialPassword?PROOF_SESSION:NEW_SESSION;sessions.set(id,new Date(Date.now()+1).toISOString());return JSONResponse({user:authUser,access_token:jwt(id),refresh_token:'private-refresh-'+id,expires_in:3600});}
   if(url.endsWith('/user')){assert.equal(options.method,'PUT');assert.equal(options.headers.Authorization,'Bearer '+jwt(PROOF_SESSION));assert.equal(body.current_password,password);password=body.password;return JSONResponse(authUser);}
   if(url.includes('/logout?scope=global')){sessions.clear();return new Response(null,{status:204});}
   if(url.includes('/logout?scope=local')){sessions.delete(PROOF_SESSION);return new Response(null,{status:204});}
@@ -56,6 +56,20 @@ test('Persian digits are accepted for imported temporary phone passwords without
 test('provider update errors and uncertain updates preserve required gate and clean native proof session',async()=>{
  for(const kind of ['rejected','network','redirect']){const f=fixture(),native=f.fetcher;const fetcher=async(url,options)=>url.endsWith('/user')?kind==='rejected'?JSONResponse({error:'weak'},422):kind==='redirect'?new Response(null,{status:302,headers:{Location:'https://other.test'}}):Promise.reject(Error('unavailable')):native(url,options);
  await assert.rejects(changeOwnPassword({client:f.client,repo:f.repo,user:f.user,authUser:f.authUser,payload:{currentPassword:'09121234567',newPassword:'new-code-123'},authUrl:'https://test-project.supabase.co',authKey:'server-test-key',fetcher}));assert.equal(f.settings.get('auth-onboarding:worker').required,true);assert(!f.sessions.has(PROOF_SESSION));}
+});
+test('personnel-code login with an incomplete saved contact accepts Persian temporary digits but still requires a different password',async()=>{
+ const f=fixture({phone:'0912123456',initialPassword:'0912123456'});f.user.username='100001';
+ const client={auth:{admin:{getUserById:async()=>({data:{user:f.authUser}})}}};
+ await passwordLogin({client,repo:f.repo,payload:{username:'۱۰۰۰۰۱',password:'۰۹۱۲۱۲۳۴۵۶'},authUrl:'https://test-project.supabase.co',authKey:'server-test-key',fetcher:f.fetcher});
+ assert.equal(f.calls[0].body.password,'0912123456');
+ await assert.rejects(f.change({currentPassword:'۰۹۱۲۱۲۳۴۵۶',newPassword:'0912123456'}),error=>error.code==='PASSWORD_IS_PHONE');
+ const result=await f.change({currentPassword:'۰۹۱۲۱۲۳۴۵۶',newPassword:'a-personal-password'});
+ assert.equal(result.passwordChangeRequired,false);assert.equal(f.user.phone,'0912123456');assert.equal(f.settings.get('auth-onboarding:worker').required,false);
+});
+test('an incomplete contact never rewrites a chosen password after its private onboarding gate is cleared',async()=>{
+ const f=fixture({phone:'0912123456',initialPassword:'0912123456'});f.user.username='100001';f.settings.set('auth-onboarding:worker',{required:false});
+ await assert.rejects(passwordLogin({client:{auth:{admin:{getUserById:async()=>({data:{user:f.authUser}})}}},repo:f.repo,payload:{username:'100001',password:'۰۹۱۲۱۲۳۴۵۶'},authUrl:'https://test-project.supabase.co',authKey:'server-test-key',fetcher:f.fetcher}),error=>error.code==='INVALID_CREDENTIALS');
+ assert.equal(f.calls[0].body.password,'۰۹۱۲۱۲۳۴۵۶');
 });
 test('failed fresh login leaves prior JWTs revoked and first-login restriction in place',async()=>{
  const f=fixture(),native=f.fetcher;const fetcher=async(url,options)=>url.endsWith('/token?grant_type=password')&&JSON.parse(options.body).password==='new-code-123'?JSONResponse({error:'unavailable'},503):native(url,options);

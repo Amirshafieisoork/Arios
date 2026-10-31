@@ -510,10 +510,20 @@ function validatePasswordRequirement(payload) {
   if (payload.requirePasswordChange !== undefined && typeof payload.requirePasswordChange !== 'boolean') fail('وضعیت تغییر رمز معتبر نیست.');
 }
 
+function matchesPhonePassword(value,phone) {
+  try { return normalizePhone(value) === normalizePhone(phone); }
+  catch {
+    // An imported contact can intentionally retain an incomplete number until
+    // its manager corrects it. A personnel-code login still uses the exact
+    // saved number as its temporary password; this never validates the phone.
+    const saved = latinDigits(phone).trim();
+    return /^[0-9]{6,15}$/.test(saved) && latinDigits(value).trim() === saved;
+  }
+}
+
 function initialPhonePassword(value,person,required) {
   if (!required || !person?.phone || !/[۰-۹٠-٩]/.test(value)) return value;
-  try { return normalizePhone(value) === normalizePhone(person.phone) ? latinDigits(value) : value; }
-  catch { return value; }
+  return matchesPhonePassword(value,person.phone) ? latinDigits(value) : value;
 }
 
 /** Private onboarding state never comes from editable Auth user_metadata. */
@@ -531,8 +541,7 @@ export async function changeOwnPassword({ client, repo, user, authUser, payload,
   let currentPassword = passwordValue(payload.currentPassword);
   const newPassword = passwordValue(payload.newPassword);
   if (!newPassword.trim() || newPassword === currentPassword) fail('یک رمز تازه و متفاوت از رمز فعلی انتخاب کنید.',400,'PASSWORD_UNCHANGED');
-  try { if (user?.phone && normalizePhone(newPassword) === normalizePhone(user.phone)) fail('رمز تازه نباید شمارهٔ تماس شما باشد.',400,'PASSWORD_IS_PHONE'); }
-  catch (error) { if (error?.code === 'PASSWORD_IS_PHONE') throw error; }
+  if (user?.phone && matchesPhonePassword(newPassword,user.phone)) fail('رمز تازه نباید شمارهٔ تماس شما باشد.',400,'PASSWORD_IS_PHONE');
   let url;
   try { url = new URL(authUrl); } catch { fail('سرویس ورود آماده نیست.',503,'AUTH_UNAVAILABLE'); }
   if (url.protocol !== 'https:' || !url.hostname.endsWith('.supabase.co') || url.pathname !== '/' || !authKey) fail('سرویس ورود آماده نیست.',503,'AUTH_UNAVAILABLE');

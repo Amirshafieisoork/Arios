@@ -15,7 +15,7 @@ document.querySelector('[data-story-title]').innerHTML=client?'از روند ک�
 set('[data-story-description]',client?'پیشرفت پروژه، صورت‌حساب‌ها و گفتگو با تیم را در پنل اختصاصی خودتان دنبال کنید.':'پروژه‌ها، گزارش‌های فعالیت و پیگیری اجرا؛ در یک فضای منظم برای مدیران و اعضای تیم.');
 set('[data-story-foot]',client?'اطلاعات پروژهٔ شما، در جای مشخص خودش.':'هر فعالیت ثبت می‌شود، هر قدم قابل پیگیری است.');
 set('[data-login-title]',client?'به پنل خودتان خوش آمدید':'به فضای کار خوش آمدید');
-set('[data-login-description]',client?'با حساب مشتری خود وارد شوید و پروژه‌هایتان را دنبال کنید.':'با حساب همکار یا مدیر آریوس وارد شوید.');
+set('[data-login-description]',client?'با حساب مشتری خود وارد شوید و پروژه‌هایتان را دنبال کنید.':'همکاران جدید: نام کاربری کد پرسنلی و رمز اولیه شماره موبایل است.');
 set('[data-submit-label]',client?'ورود به پنل مشتریان':'ورود به فضای کار');
 const alternate=document.querySelector('[data-portal-switch]');
 alternate.href=client?'/login/team':'/login/client';
@@ -23,7 +23,7 @@ alternate.innerHTML=client?'عضو تیم هستید؟ <strong>ورود همکا
 const password=document.querySelector('#login-password');
 const toggle=document.querySelector('[data-password-toggle]');
 toggle.addEventListener('click',()=>{const shown=password.type==='password';password.type=shown?'text':'password';toggle.setAttribute('aria-pressed',String(shown));toggle.setAttribute('aria-label',shown?'پنهان کردن رمز عبور':'نمایش رمز عبور');password.focus();});
-const messages={INVALID_CREDENTIALS:'شماره تماس یا رمز عبور درست نیست. دوباره بررسی کنید.',UNAUTHORIZED:'شماره تماس یا رمز عبور درست نیست. دوباره بررسی کنید.',INVALID_LOGIN:'شماره تماس یا رمز عبور درست نیست. دوباره بررسی کنید.',EMAIL_NOT_CONFIRMED:'حساب شما هنوز تأیید نشده است. با مدیر آریوس هماهنگ کنید.',NOT_A_MEMBER:'این حساب هنوز به فضای کار آریوس اضافه نشده است.',FORBIDDEN:'این حساب اجازهٔ ورود به پنل انتخاب‌شده را ندارد.',PORTAL_FORBIDDEN:'این حساب اجازهٔ ورود به پنل انتخاب‌شده را ندارد.',WRONG_PORTAL:'از صفحهٔ ورود متناسب با نقش حسابتان استفاده کنید.',RATE_LIMITED:'تلاش‌های ورود زیاد شده است. کمی بعد دوباره امتحان کنید.'};
+const messages={INVALID_CREDENTIALS:'کد پرسنلی، نام کاربری، شماره تماس یا رمز عبور درست نیست. دوباره بررسی کنید.',UNAUTHORIZED:'کد پرسنلی، نام کاربری، شماره تماس یا رمز عبور درست نیست. دوباره بررسی کنید.',INVALID_LOGIN:'کد پرسنلی، نام کاربری، شماره تماس یا رمز عبور درست نیست. دوباره بررسی کنید.',EMAIL_NOT_CONFIRMED:'حساب شما هنوز تأیید نشده است. با مدیر آریوس هماهنگ کنید.',NOT_A_MEMBER:'این حساب هنوز به فضای کار آریوس اضافه نشده است.',FORBIDDEN:'این حساب اجازهٔ ورود به پنل انتخاب‌شده را ندارد.',PORTAL_FORBIDDEN:'این حساب اجازهٔ ورود به پنل انتخاب‌شده را ندارد.',WRONG_PORTAL:'از صفحهٔ ورود متناسب با نقش حسابتان استفاده کنید.',RATE_LIMITED:'تلاش‌های ورود زیاد شده است. کمی بعد دوباره امتحان کنید.'};
 const form=document.querySelector('#login-form');
 async function enterPanel(data){
  const destination=data.portal==='client'||data.portal==='team'?data.portal:data.user.role==='customer'?'client':'team';

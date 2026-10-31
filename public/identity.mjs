@@ -17,9 +17,12 @@ export function normalizePhone(value) {
 export function normalizeUsername(value) {
   if (typeof value !== 'string') throw new IdentityError('نام کاربری معتبر نیست.');
   const username = latinDigits(value).normalize('NFKC').trim().toLowerCase();
-  if (!/^[\p{L}][\p{L}\p{N}_.-]{2,39}$/u.test(username)) throw new IdentityError('نام کاربری باید ۳ تا ۴۰ نویسه و شامل حروف، عدد، نقطه، خط تیره یا زیرخط باشد.');
+  if (!/^[\p{L}][\p{L}\p{N}_.-]{2,39}$/u.test(username) && !numericPersonnelUsername(username)) throw new IdentityError('نام کاربری باید ۳ تا ۴۰ نویسه با شروع حرف، یا کد پرسنلی ۶ تا ۴۰ رقمی باشد. کد پرسنلی نباید با صفر شروع شود یا شبیه شماره تماس باشد.');
   return username;
 }
+// Reserve phone prefixes for the existing phone route, including malformed
+// numbers. Short numeric input such as "123" keeps its original phone error.
+const numericPersonnelUsername = value => /^\d{6,40}$/.test(value) && !/^(?:0|98)/.test(value) && !/^9\d{9,}$/.test(value);
 export const phoneAuthEmail = phone => `phone.${normalizePhone(phone).slice(1)}@phone.arios.invalid`;
 export const internalAuthEmail = value => typeof value === 'string' && /@phone\.arios\.invalid$/i.test(value);
 export function loginIdentity(payload) {
@@ -30,5 +33,6 @@ export function loginIdentity(payload) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier) || internalAuthEmail(identifier)) throw new IdentityError('شماره تماس، نام کاربری یا ایمیل معتبر نیست.');
     return { email: identifier.toLowerCase() };
   }
+  if (numericPersonnelUsername(latinDigits(identifier).normalize('NFKC'))) return { username: normalizeUsername(identifier) };
   return /^[+\d۰-۹٠-٩(]/u.test(identifier) ? { phone: normalizePhone(identifier) } : { username: normalizeUsername(identifier) };
 }
