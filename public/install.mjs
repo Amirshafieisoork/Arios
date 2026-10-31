@@ -27,14 +27,12 @@ export function mountInstaller(scope=globalThis){
   if(previous?.container.isConnected&&previous.slot===slot)return previous;
   previous?.destroy();
   if(!doc.querySelector('[data-arios-install-styles]')){const style=doc.createElement('link');style.rel='stylesheet';style.href=new URL('./install.css',import.meta.url).href;style.dataset.ariosInstallStyles='';doc.head.append(style);}
-  const container=doc.createElement('details');container.className='arios-install-menu';container.dataset.ariosInstall='';
+  const container=doc.createElement('div');container.className='arios-install-inline';container.dataset.ariosInstall='';
   if(context.android)container.dataset.androidApp='';
-  const summary=doc.createElement('summary');summary.className='arios-install-menu-toggle';summary.setAttribute('aria-label','منوی برنامه');summary.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg><span class="arios-install-menu-label">منو</span>';
-  const popover=doc.createElement('div');popover.className='arios-install-popover';
-  const button=doc.createElement('button');button.className='arios-install-button';button.type='button';button.innerHTML='<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 15v5h16v-5"/></svg><span>'+(context.android?'دانلود اپ اندروید':'نصب آریوس')+'</span>';
-  popover.append(button);container.append(summary,popover);slot.append(container);let deferred=null,dialog=null,busy=false,controller;
-  const positionMenu=()=>{if(!container.open)return;const rect=container.getBoundingClientRect(),width=popover.getBoundingClientRect().width,viewport=scope.innerWidth||doc.documentElement.clientWidth;popover.style.left=(Math.max(12,Math.min(rect.left,viewport-width-12))-rect.left)+'px';};
-  container.addEventListener('toggle',positionMenu);
+  const button=doc.createElement(context.android?'a':'button');button.className='arios-install-button';
+  if(context.android){button.href=ANDROID_APP_DOWNLOAD;button.download='arios-android.apk';}else button.type='button';
+  button.innerHTML='<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 15v5h16v-5"/></svg><span>نصب آریوس</span>';
+  container.append(button);slot.append(container);let deferred=null,dialog=null,busy=false,controller;
   const remove=()=>{dialog?.remove();dialog=null;container.remove();if(installers.get(doc)===controller)installers.delete(doc);};
   const showGuide=()=>{
     if(dialog?.isConnected){dialog.focus();return;}
@@ -45,22 +43,19 @@ export function mountInstaller(scope=globalThis){
     const actions=doc.createElement('div');actions.className='arios-install-actions';
     if(context.android){const download=doc.createElement('a');download.href=ANDROID_APP_DOWNLOAD;download.download='arios-android.apk';download.className='arios-install-primary';download.textContent='دانلود فایل نصب اندروید';actions.append(download);}
     const close=doc.createElement('button');close.type='button';close.textContent='متوجه شدم';close.className='arios-install-primary';close.addEventListener('click',()=>dialog.close());actions.append(close);
-    dialog.append(title,intro,list,actions);dialog.addEventListener('click',event=>{if(event.target===dialog){const rect=dialog.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)dialog.close();}});dialog.addEventListener('close',()=>summary.focus());doc.body.append(dialog);dialog.showModal();
+    dialog.append(title,intro,list,actions);dialog.addEventListener('click',event=>{if(event.target===dialog){const rect=dialog.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)dialog.close();}});dialog.addEventListener('close',()=>button.focus());doc.body.append(dialog);dialog.showModal();
   };
-  const onPrompt=event=>{event.preventDefault();if(context.android)return;deferred=event;button.querySelector('span').textContent='نصب برنامهٔ آریوس';};
+  const onPrompt=event=>{event.preventDefault();if(context.android)return;deferred=event;};
   const onInstalled=()=>{deferred=null;controller.destroy();};
-  const onOutside=event=>{if(container.open&&!container.contains(event.target))container.open=false;};
-  const onEscape=event=>{if(event.key==='Escape'&&container.open){container.open=false;summary.focus();}};
   scope.addEventListener('beforeinstallprompt',onPrompt);scope.addEventListener('appinstalled',onInstalled);
-  scope.addEventListener('resize',positionMenu);doc.addEventListener('pointerdown',onOutside);doc.addEventListener('keydown',onEscape);
-  button.addEventListener('click',async()=>{
-    container.open=false;if(busy)return;if(!deferred)return showGuide();busy=true;button.disabled=true;
+  if(!context.android)button.addEventListener('click',async()=>{
+    if(busy)return;if(!deferred)return showGuide();busy=true;button.disabled=true;
     const prompt=deferred;deferred=null;
-    try{await prompt.prompt();const choice=await prompt.userChoice;if(choice?.outcome==='accepted')remove();}
+    try{await prompt.prompt();const choice=await prompt.userChoice;if(choice?.outcome==='accepted')controller.destroy();}
     catch{showGuide();}
     finally{busy=false;if(button.isConnected)button.disabled=false;}
   });
-  controller={container,slot,remove,showGuide,destroy(){scope.removeEventListener('beforeinstallprompt',onPrompt);scope.removeEventListener('appinstalled',onInstalled);scope.removeEventListener('resize',positionMenu);doc.removeEventListener('pointerdown',onOutside);doc.removeEventListener('keydown',onEscape);remove();}};
+  controller={container,slot,remove,showGuide,destroy(){scope.removeEventListener('beforeinstallprompt',onPrompt);scope.removeEventListener('appinstalled',onInstalled);remove();}};
   installers.set(doc,controller);return controller;
 }
 if(typeof window!=='undefined'&&typeof document!=='undefined'){

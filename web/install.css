@@ -1,20 +1,12 @@
 [data-arios-install-slot]{display:inline-flex;align-items:center;flex-shrink:0}
 [data-arios-install-slot]:empty{display:none}
-.home-header{position:relative;align-items:center;min-height:52px}
-.home-header [data-arios-install-slot]{position:absolute;inset-inline-end:0}
-.auth-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.auth-topbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
 .auth-topbar .auth-back{align-self:center}
-.arios-install-menu{position:relative;z-index:40;direction:rtl;font-family:inherit}
-.arios-install-menu-toggle{display:flex;align-items:center;justify-content:center;gap:8px;min-width:44px;min-height:44px;padding:8px 12px;border:1px solid #c7a46d80;background:#17292d;color:#faebd3;border-radius:12px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;line-height:1.6;list-style:none}
-.arios-install-menu-toggle::-webkit-details-marker{display:none}
-.arios-install-menu-toggle::marker{content:''}
-.arios-install-menu-toggle svg{width:20px;height:20px;flex-shrink:0}
-.arios-install-menu[open]>.arios-install-menu-toggle,.arios-install-menu-toggle:hover{background:#243c40}
-.arios-install-popover{position:absolute;top:calc(100% + 8px);left:0;width:230px;max-width:calc(100vw - 24px);padding:6px;border:1px solid #c7a46d80;background:#17292d;box-shadow:0 10px 30px #0003;border-radius:14px}
-.arios-install-button{display:flex;align-items:center;gap:10px;width:100%;padding:12px;border:0;background:transparent;color:#faebd3;border-radius:9px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;line-height:1.7;text-align:start;min-height:46px}
+.arios-install-inline{display:inline-flex;align-items:center;direction:rtl;font-family:inherit}
+.arios-install-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;border:1px solid #c7a46d80;background:#faf7ef;color:#17292d;border-radius:10px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;line-height:1.7;min-height:44px;white-space:nowrap;text-decoration:none}
 .arios-install-button svg{width:21px;height:21px;flex-shrink:0;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.arios-install-button:hover{background:#ffffff12}
-.arios-install-menu-toggle:focus-visible,.arios-install-button:focus-visible,.arios-install-primary:focus-visible{outline:3px solid #c7a46d;outline-offset:3px}
+.arios-install-button:hover{background:#efe5d4}
+.arios-install-button:focus-visible,.arios-install-primary:focus-visible{outline:3px solid #c7a46d;outline-offset:3px}
 .arios-install-dialog{width:min(500px,calc(100% - 32px));max-height:calc(100dvh - 40px);overflow:auto;padding:28px;border:1px solid #d7c6a7;border-radius:24px;background:#faf7ef;color:#1b3036;font:400 16px/1.95 Vazirmatn,Tahoma,sans-serif;direction:rtl;box-shadow:0 24px 70px #0004}
 .arios-install-dialog::backdrop{background:#0b1b24a6}
 .arios-install-dialog h2{font-size:23px;line-height:1.6;margin:0 0 12px}
@@ -23,6 +15,6 @@
 .arios-install-dialog li{padding:0 4px;margin:12px 0}
 .arios-install-actions{display:flex;justify-content:flex-start;gap:10px;flex-wrap:wrap}
 .arios-install-primary{text-decoration:none;display:inline-flex;align-items:center;justify-content:center;font:600 16px/1.6 Vazirmatn,Tahoma,sans-serif;cursor:pointer;border:0;border-radius:12px;padding:11px 22px;background:#17292d;color:#faf7ef}
-@media(max-width:480px){.arios-install-menu-label{display:none}.arios-install-menu-toggle{padding:8px;min-width:44px}.arios-install-dialog{padding:22px}.arios-install-dialog h2{font-size:21px}}
-@media(display-mode:standalone){.arios-install-menu:not([data-android-app]){display:none}}
+@media(max-width:480px){.arios-install-button{font-size:14px;padding:8px 10px}.arios-install-button svg{width:18px;height:18px}.arios-install-dialog{padding:22px}.arios-install-dialog h2{font-size:21px}}
+@media(display-mode:standalone){.arios-install-inline:not([data-android-app]){display:none}}
 @media print{[data-arios-install-slot],.arios-install-dialog{display:none!important}}
