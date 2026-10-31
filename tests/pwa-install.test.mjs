@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
-import {installContext,installationSteps,registerAppWorker} from '../web/install.mjs';
+import {ANDROID_APP_DOWNLOAD,installContext,installationSteps,registerAppWorker,mountInstaller} from '../web/install.mjs';
 
 test('install metadata is stable, standalone and includes real correctly sized app icons',async()=>{
   const manifest=JSON.parse(await readFile('public/assets/manifest.webmanifest','utf8'));
@@ -17,9 +17,16 @@ test('install metadata is stable, standalone and includes real correctly sized a
 test('install instructions distinguish installed apps, iOS, unsupported and embedded browsers',()=>{
   const ios=installContext({isSecureContext:true,navigator:{userAgent:'iPhone Safari',standalone:false}});assert(ios.ios);assert(installationSteps(ios).some(step=>step.includes('Safari')));
   const installed=installContext({isSecureContext:true,navigator:{standalone:true}});assert(installed.installed);
-  const android=installContext({navigator:{userAgent:'Android Chrome'}});assert(installationSteps(android).some(step=>step.includes('نصب برنامه')));
+  const android=installContext({navigator:{userAgent:'Android Chrome'}});assert(installationSteps(android).some(step=>step.includes('فایل نصب اندروید')));assert(!installationSteps(android).some(step=>step.includes('صفحهٔ اصلی')));
   const firefox=installContext({navigator:{userAgent:'Firefox'}});assert(installationSteps(firefox)[0].includes('Chrome'));
-  const embedded=installContext({navigator:{userAgent:'Android Telegram'}});assert(installationSteps(embedded)[0].includes('مرورگر داخلی'));
+  const embedded=installContext({navigator:{userAgent:'Android Telegram'}});assert(installationSteps(embedded)[0].includes('Chrome'));assert(installationSteps(embedded)[0].includes('فایل نصب اندروید'));
+  assert(installationSteps(installContext({navigator:{userAgent:'iPhone Telegram'}}))[0].includes('مرورگر داخلی'));
+});
+test('Android download is an APK and native Android never registers a worker or mounts another installer',async()=>{
+  assert.equal(ANDROID_APP_DOWNLOAD,'/downloads/arios-android.apk');
+  const calls=[],scope={isSecureContext:true,location:{protocol:'https:',hostname:'arioshub.ir'},navigator:{userAgent:'Mozilla/5.0 (Linux; Android 14) AriosAndroid/1',serviceWorker:{register:async(...args)=>{calls.push(args);}}},document:{body:{}}};
+  assert.equal(installContext(scope).native,true);assert.equal(await registerAppWorker(scope),null);assert.equal(mountInstaller(scope),null);assert.deepEqual(calls,[]);
+  const samsung=installContext({isSecureContext:true,navigator:{userAgent:'Mozilla/5.0 (Linux; Android 14; SM-S918B) SamsungBrowser/26.0',standalone:true}});assert.equal(samsung.android,true);assert.equal(samsung.native,false);assert.equal(samsung.installed,true);
 });
 test('root worker registration uses no cache and never blocks unsupported or insecure contexts',async()=>{
   const calls=[],register=async(...args)=>{calls.push(args);return {scope:'https://arioshub.ir/'};};

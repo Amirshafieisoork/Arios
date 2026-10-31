@@ -14,7 +14,7 @@ export function mountPasswordOnboarding({scope=globalThis,fetcher=fetch,onComple
   const message=(text,failed=false)=>{error.textContent=text;error.hidden=!text;error.setAttribute('role',failed?'alert':'status');};
   const clear=()=>{current.value='';next.value='';confirm.value='';viewer=null;};
   const hideLogin=hidden=>{
-    for(const selector of ['#login-form','.passkey-login','[data-forgot-password]','#recovery-form','[data-portal-switch]']){
+    for(const selector of ['#login-form','.passkey-login','[data-android-app-guide]','[data-forgot-password]','#recovery-form','[data-portal-switch]']){
       const node=doc.querySelector(selector);if(node)node.hidden=selector==='#recovery-form'?true:hidden;
     }
   };

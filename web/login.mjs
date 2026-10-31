@@ -1,4 +1,4 @@
-import {mountPasskeyLogin,offerPasskeySetupAfterLogin} from './passkey-client.mjs';
+import {mountPasskeyLogin} from './passkey-client.mjs';
 import {mountPasswordRecovery} from './recovery.mjs';
 import {landingPage} from './portal-access.mjs';
 import './install.mjs';
@@ -7,7 +7,6 @@ const portal=location.pathname.replace(/\/+$/,'').endsWith('/client')?'client':'
 const client=portal==='client';
 const setupPasskey=new URLSearchParams(location.search).get('setup')==='passkey';
 const destinationPage=role=>setupPasskey?'settings':landingPage(role);
-const passkeyChoice=document.querySelector('#login-enable-passkey');if(passkeyChoice)passkeyChoice.checked=setupPasskey;
 const set=(selector,value)=>{const el=document.querySelector(selector);if(el)el.textContent=value;};
 document.title=(client?'ورود مشتریان':'ورود همکاران')+' | گروه آریوس';
 set('[data-portal-tag]',client?'پنل اختصاصی مشتریان':'فضای کار تیم آریوس');
@@ -28,7 +27,6 @@ const messages={INVALID_CREDENTIALS:'شماره تماس یا رمز عبور د
 const form=document.querySelector('#login-form');
 async function enterPanel(data){
  const destination=data.portal==='client'||data.portal==='team'?data.portal:data.user.role==='customer'?'client':'team';
- if(setupPasskey||passkeyChoice?.checked)await offerPasskeySetupAfterLogin({force:true});
  location.assign('/portal/?portal='+destination+'#'+destinationPage(data.user.role));
 }
 const onboarding=mountPasswordOnboarding({onComplete:enterPanel,onLogout:()=>location.replace('/login/'+portal)});
@@ -47,6 +45,10 @@ form.addEventListener('submit',async event=>{
  }catch(err){error.textContent=err instanceof TypeError?'ارتباط برقرار نشد. اتصال اینترنت را بررسی و دوباره امتحان کنید.':err.message||'ورود انجام نشد.';error.hidden=false;button.disabled=false;label.textContent=client?'ورود به پنل مشتریان':'ورود به فضای کار';}
 });
 
-mountPasskeyLogin({portal,onSuccess:async data=>{password.value='';if(onboarding.show(data))return;await enterPanel(data);}});
+const browserKeys=document.querySelector('.passkey-login');
+const nativeApp=/\bAriosAndroid\/[0-9]/.test(navigator.userAgent||'');
+const nativeGuide=document.querySelector('[data-android-app-guide]');if(nativeApp&&nativeGuide)nativeGuide.hidden=true;
+if(nativeApp&&browserKeys)browserKeys.hidden=true;
+else if(browserKeys){let mounted=false;const mount=()=>{if(!mounted&&browserKeys.open){mounted=true;mountPasskeyLogin({portal,onSuccess:async data=>{password.value='';if(onboarding.show(data))return;await enterPanel(data);}});}};browserKeys.addEventListener('toggle',mount);mount();}
 mountPasswordRecovery();
 void onboarding.resume();

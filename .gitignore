@@ -25,3 +25,9 @@ secrets/
 *.log
 supabase/.temp/
 supabase/.branches/
+
+# Native Android builds and private release signing material
+dist-android/
+android-app/.build/
+*.jks
+*.keystore

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {creationOptionsFromJSON,requestOptionsFromJSON,credentialJSON,decodeBase64URL,encodeBase64URL,loginWithPasskey,registerPasskey,mountPasskeyLogin,passkeySupport,passkeyMessage,preparePasskeyRegistration,passkeyDeviceHelp} from '../public/passkey-client.mjs';
-import {renderPasskeySettings,wirePasskeySettings,passkeyDeviceHTML} from '../public/passkey-settings.mjs';
+import {renderPasskeySettings,wirePasskeySettings,passkeyDeviceHTML,nativeBiometricApp} from '../public/passkey-settings.mjs';
 
 const b64=value=>Buffer.from(value).toString('base64url');
 const bytes=value=>new Uint8Array(value).buffer;
@@ -97,6 +97,24 @@ test('settings are available to each authenticated role and escape authenticator
   assert(!html.includes('<img'));assert(html.includes('&lt;img'));assert(html.includes('data-passkey-remove="own-key"'));
 });
 
+test('native Android presentation uses only the app lock and never invokes browser credentials',()=>{
+  const scope={navigator:{userAgent:'Mozilla Android AriosAndroid/1.0'},document:{querySelector(){assert.fail('Native app must not mount browser key management');}}};
+  assert(nativeBiometricApp(scope));assert(!nativeBiometricApp({navigator:{userAgent:'Android Chrome/1'}}));
+  const html=renderPasskeySettings({user:{id:'person',role:'worker'}},context(),{scope});
+  assert(html.includes('native-biometric-settings'));assert(!html.includes('data-passkey-register'));assert(!html.includes('data-passkey-browser-settings'));
+  wirePasskeySettings({user:{id:'person',role:'worker'}},context(),{scope,fetcher:()=>assert.fail('Native lock cannot use browser credential endpoints')});
+});
+
+test('closed optional browser-key settings issue no challenge or list requests until explicitly opened',async()=>{
+  const enroll=element(),reload=element(),status=element(),devices=element(),disclosure=element({open:false}),root=element({dataset:{passkeySettingsUser:'own-account'},isConnected:true});
+  root.querySelector=selector=>({'[data-passkey-register]':enroll,'[data-passkey-reload]':reload,'[data-passkey-settings-status]':status,'[data-passkey-devices]':devices,'[data-passkey-browser-settings]':disclosure}[selector]);root.querySelectorAll=()=>[];
+  const calls=[],scope=fakeScope({document:{querySelector:()=>root}});
+  wirePasskeySettings({user:{id:'own-account',role:'worker'}},context(),{scope,fetcher:async url=>{calls.push(url);return url.endsWith('/status')?json({enabled:false,domainSupported:true}):json({passkeys:[]});}});
+  await flush();assert.deepEqual(calls,[]);
+  disclosure.open=true;disclosure.events.toggle();await flush();assert.deepEqual(calls.sort(),['/api/passkeys','/api/passkeys/status']);
+  disclosure.open=false;disclosure.events.toggle();disclosure.open=true;disclosure.events.toggle();await flush();assert.equal(calls.length,2);
+});
+
 test('own-key rename and deletion use confirmed modal actions and send no account identity',async()=>{
   const enroll=element(),reload=element(),status=element(),devices=element(),rename=element({dataset:{passkeyRename:'key-1'}}),remove=element({dataset:{passkeyRemove:'key-1'}}),root=element({dataset:{passkeySettingsUser:'own-account'},isConnected:true});
   root.querySelector=selector=>({'[data-passkey-register]':enroll,'[data-passkey-reload]':reload,'[data-passkey-settings-status]':status,'[data-passkey-devices]':devices}[selector]);
@@ -147,13 +165,17 @@ test('device guidance explains embedded browsers and local phone setup without c
 });
 
 
-test('canonical setup handoff preserves explicit activation intent and normal password login stays direct',async()=>{
+test('ordinary login never launches passkey creation and browser keys stay an explicit optional method',async()=>{
   const [settings,login,html]=await Promise.all(['public/passkey-settings.mjs','web/login.mjs','web/login.html'].map(file=>readFile(new URL('../'+file,import.meta.url),'utf8')));
   assert.match(settings,/https:\/\/arioshub\.ir\/login\/.*\?setup=passkey/);
-  assert.match(login,/setupPasskey\|\|passkeyChoice\?\.checked/);
+  assert(!login.includes('offerPasskeySetupAfterLogin'));
+  assert(!login.includes('passkeyChoice'));
   assert.match(login,/setupPasskey\?'settings':landingPage\(role\)/);
-  assert(html.includes('id="login-enable-passkey"'));
-  assert(!html.includes('id="login-enable-passkey" checked'));
+  assert(!html.includes('id="login-enable-passkey"'));
+  assert(html.includes('<details class="passkey-login">'));
+  assert(html.includes('ورود با گذرکلید موجود'));
+  assert(html.includes('href="/downloads/arios-android.apk"'));
+  assert.match(login,/nativeGuide\.hidden=true/);
 });
 
 test('same-device recovery remains discoverable and verified, while default creation can still use another provider',()=>{

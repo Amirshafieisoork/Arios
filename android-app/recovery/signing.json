@@ -1,0 +1,10 @@
+{
+  "format": "arios-android-signing-recovery/v1",
+  "encryptionFormat": "arios-backup/v1",
+  "backupId": "3c1a807a-77ee-4595-b735-b3d051e333bb",
+  "itemId": "android-release-signing.zip",
+  "keyId": "e6332433c95b",
+  "sha256": "d181afae1575469b38d700f32e14bc2c99a143e3975dba4f054603d6c3a8d048",
+  "bytes": 5482,
+  "signerCertificateSha256": "e6aa957cf77c86a8556239a9fa968c91dfb8a6b2cd0218e320597f6f443815dd"
+}

@@ -1,0 +1,21 @@
+{
+  "applicationId": "ir.arioshub.app",
+  "versionCode": 1,
+  "versionName": "1.0.0",
+  "minSdk": 28,
+  "targetSdk": 35,
+  "bytes": 201216,
+  "sha256": "8bc9d6036eea04bb8bf45a1b02777e04cb096389af06d827f39fe6ba60562008",
+  "sourceTreeSha256": "777d7fbc6d783ec5c8610fdc1c43c96593b23582378d587aca45db007649cfd8",
+  "signerCertificateSha256": "e6aa957cf77c86a8556239a9fa968c91dfb8a6b2cd0218e320597f6f443815dd",
+  "signatureSchemes": [
+    "v2",
+    "v3"
+  ],
+  "toolchain": {
+    "platform": "35_r02",
+    "buildTools": "35.0.1",
+    "compiler": "ECJ3.39.0"
+  },
+  "format": "arios-android-release/v1"
+}
