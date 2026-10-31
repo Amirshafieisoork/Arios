@@ -48,7 +48,7 @@ test('manager reset requires matching passwords and never resends contact or acc
   const state=publicState(createSeedState(),'manager'),events={},mutations=[];let modal,refreshes=0;
   global(t,'document',{querySelector:()=>null,querySelectorAll:selector=>selector==='[data-reset-account]'?[{dataset:{resetAccount:'worker'},addEventListener:(_,fn)=>events.reset=fn}]:[]});
   wireOperations('team',state,ctx({modal:value=>modal=value,mutate:async(action,payload)=>{mutations.push({action,payload});return{id:'worker'};},refresh:async()=>refreshes++}));
-  events.reset();assert.match(modal.body,/minlength="6"/);assert.match(modal.body,/پیامک یا ایمیل خودکار ارسال نمی‌شود/);
+  events.reset();assert.match(modal.body,/minlength="1"/);assert.match(modal.body,/پیامک یا ایمیل خودکار ارسال نمی‌شود/);
   const data=new FormData();data.set('password','123456');data.set('confirmPassword','654321');
   await assert.rejects(modal.onSubmit(data),/یکسان نیستند/);assert.equal(mutations.length,0);
   data.set('confirmPassword','123456');await modal.onSubmit(data);

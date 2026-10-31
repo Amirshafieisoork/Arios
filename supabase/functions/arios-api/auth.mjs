@@ -20,7 +20,7 @@ export function emailValue(value) {
   return email;
 }
 export function passwordValue(value) {
-  if (typeof value !== 'string' || value.length < 6 || value.length > 128) fail('رمز عبور باید بین ۶ و ۱۲۸ نویسه باشد.');
+  if (typeof value !== 'string' || value.length < 1 || value.length > 128) fail('رمز عبور را وارد کنید؛ هر رمزی مجاز است (حداکثر ۱۲۸ نویسه).');
   return value;
 }
 export function manager(user) {

@@ -35,7 +35,7 @@ test('Iranian and international contact numbers normalize without requiring emai
   assert.throws(() => loginIdentity({ email: phoneAuthEmail(PHONE) }));
 });
 
-test('new accounts use a six-character password and phone while private email aliases stay out of snapshots', async () => {
+test('new accounts accept any chosen password with a phone while private email aliases stay out of snapshots', async () => {
   const f = fixture();
   const result = await createAccount(f.client, f.repo, { id: 'manager', role: 'manager' }, { name: 'همکار جدید', phone: '۰۹۱۲۳۴۵۶۷۸۹', role: 'worker', password: '123456' });
   assert.equal(result.result.phone, PHONE);
@@ -44,8 +44,9 @@ test('new accounts use a six-character password and phone while private email al
   assert.match(created.email, /^account\.[a-f0-9-]{36}@phone\.arios\.invalid$/); assert.equal(created.email_confirm, true);
   assert.equal(created.phone, undefined, 'No phone-provider/SMS flow is required.');
   assert.equal(JSON.stringify(publicState(f.read(), 'manager')).includes('@phone.arios.invalid'), false);
-  assert.throws(() => passwordValue('12345'));
-  assert.equal(passwordValue('123456'), '123456');
+  assert.throws(() => passwordValue(''));
+  assert.equal(passwordValue('12345'), '12345');
+  assert.equal(passwordValue('1'), '1');
 });
 
 test('duplicate phone identities are rejected before creating a second Auth account', async () => {

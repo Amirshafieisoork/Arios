@@ -44,9 +44,9 @@ test('native proof, update and fresh login clear gate while all older JWT sessio
  await assert.rejects(authenticate(f.request('/state'),f.client,f.repo),e=>e.code==='INVALID_SESSION');
  const fresh=new Request('https://app.test',{headers:{Authorization:'Bearer '+result.access_token}});assert.equal((await authenticate(fresh,f.client,f.repo)).user.passwordChangeRequired,false);
 });
-test('wrong current password, unchanged password, contact-number variants and short password cannot clear gate',async()=>{
+test('wrong current password, unchanged password and contact-number variants cannot clear gate',async()=>{
  const f=fixture();await assert.rejects(f.change({currentPassword:'wrong123',newPassword:'my-new-password'}),e=>e.code==='CURRENT_PASSWORD_INVALID');assert.equal(f.calls.filter(c=>c.url.endsWith('/user')).length,0);
- for(const newPassword of ['09121234567','+989121234567','۰۹۱۲۱۲۳۴۵۶۷','0912-123-4567','123'])await assert.rejects(f.change({currentPassword:'09121234567',newPassword}));
+ for(const newPassword of ['09121234567','+989121234567','۰۹۱۲۱۲۳۴۵۶۷','0912-123-4567'])await assert.rejects(f.change({currentPassword:'09121234567',newPassword}));
  assert.equal(f.settings.get('auth-onboarding:worker').required,true);
 });
 test('Persian digits are accepted for imported temporary phone passwords without changing arbitrary chosen passwords',async()=>{

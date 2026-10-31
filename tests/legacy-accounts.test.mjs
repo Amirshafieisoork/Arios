@@ -128,7 +128,7 @@ test('activation rejects staff, owner, archived, active, duplicate and invalid i
   for (const [id, password, phone, expected] of [
     ['manager', 'simple6', PHONE, 'MANAGER_ROLE_PROTECTED'],
     ['customer', 'simple6', PHONE, 'ACCOUNT_ALREADY_ACTIVE'],
-    ['worker', '12345', PHONE, 'INVALID_INPUT'],
+    ['worker', '', PHONE, 'INVALID_INPUT'],
     ['worker', 'simple6', '123', 'INVALID_PHONE'],
   ]) {
     const f = fixture();

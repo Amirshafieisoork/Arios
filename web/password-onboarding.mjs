@@ -36,7 +36,7 @@ export function mountPasswordOnboarding({scope=globalThis,fetcher=fetch,onComple
   });
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(busy||!active())return;message('');
-    if(typeof next.value!=='string'||next.value.length<6||next.value.length>128){message('رمز تازه باید بین ۶ تا ۱۲۸ نویسه باشد.',true);next.focus();return;}
+    if(typeof next.value!=='string'||next.value.length<1||next.value.length>128){message('رمز تازه را وارد کنید؛ هر رمزی مجاز است (حداکثر ۱۲۸ نویسه).',true);next.focus();return;}
     if(next.value!==confirm.value){message('تکرار رمز تازه با خود رمز یکسان نیست.',true);confirm.focus();return;}
     if(!current.value){message('رمز فعلی حساب را وارد کنید؛ برای ورود اول همان شماره تماس است.',true);current.focus();return;}
     if(next.value===current.value){message('رمز تازه باید با رمز اولیه متفاوت باشد.',true);next.focus();return;}

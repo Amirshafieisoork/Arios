@@ -100,7 +100,7 @@ test('Supabase accounts use phone and a simple initial password while legacy Cha
   wireOperations('team', state, ctx);
   click();
   assert.match(modal.body, /name="password"/);
-  assert.match(modal.body, /minlength="6" maxlength="128"/);
+  assert.match(modal.body, /minlength="1" maxlength="128"/);
   assert.match(modal.body, /name="phone" type="tel"/);
   assert(!modal.body.includes('name="email"'));
   assert(!modal.body.includes('ChatGPT'));
