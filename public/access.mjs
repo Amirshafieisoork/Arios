@@ -11,14 +11,93 @@ export function allowedPortalPage(page, role) {
   if (page === 'finance') return ['manager','customer'].includes(role);
   return ['manager','worker','customer'].includes(role);
 }
+
+/**
+ * Every destination is listed once, inside the group where a user would look for it.
+ * `analytics` is intentionally absent: it is a drill-down from «گزارش‌ها و تأییدها», not a top-level section.
+ */
+const PORTAL_GROUPS = {
+  manager: [
+    ['کار روزانه', [
+      ['dashboard', 'داشبورد', 'dashboard'],
+      ['projects', 'پروژه‌ها', 'projects'],
+      ['reports', 'گزارش‌ها و تأییدها', 'reports'],
+      ['calendar', 'تقویم و برنامه‌ریزی', 'calendar'],
+      ['voice', 'ویس‌ها و گزارش صوتی', 'assistant'],
+    ]],
+    ['تیم و منابع', [
+      ['team', 'افراد و همکاری', 'team'],
+      ['inventory', 'انبار و مصرف', 'inventory'],
+      ['documents', 'مدارک پروژه‌ها', 'file'],
+    ]],
+    ['مالی و مشتریان', [
+      ['finance', 'حسابداری و صورت‌حساب', 'finance'],
+      ['customers', 'مشتریان و فروش', 'team'],
+      ['leads', 'درخواست‌های مشاوره', 'inbox'],
+    ]],
+    ['گفت‌وگو و پیگیری', [
+      ['messages', 'گفت‌وگوهای پروژه', 'messages'],
+      ['support', 'پشتیبانی', 'support'],
+      ['notifications', 'مرکز پیگیری', 'bell'],
+      ['assistant', 'دستیار آریوس', 'assistant'],
+    ]],
+    ['ابزارهای مدیر', [
+      ['management', 'ویرایش و بایگانی داده‌ها', 'database'],
+    ]],
+  ],
+  worker: [
+    ['کار من', [
+      ['dashboard', 'فضای کار من', 'dashboard'],
+      ['projects', 'پروژه‌های من', 'projects'],
+      ['reports', 'گزارش و مأموریت من', 'reports'],
+      ['voice', 'ویس‌ها و گزارش صوتی', 'assistant'],
+      ['inventory', 'مصرف و برگشت کالا', 'inventory'],
+    ]],
+    ['همراهی', [
+      ['calendar', 'تقویم و برنامه‌ریزی', 'calendar'],
+      ['documents', 'مدارک پروژه‌ها', 'file'],
+      ['messages', 'گفت‌وگوهای پروژه', 'messages'],
+      ['support', 'پشتیبانی', 'support'],
+      ['notifications', 'مرکز پیگیری', 'bell'],
+      ['assistant', 'دستیار آریوس', 'assistant'],
+    ]],
+  ],
+  customer: [
+    ['پروژه‌های من', [
+      ['dashboard', 'نمای کلی من', 'dashboard'],
+      ['projects', 'پروژه‌های من', 'projects'],
+      ['finance', 'صورت‌حساب و پرداخت', 'finance'],
+      ['calendar', 'تقویم و برنامه‌ریزی', 'calendar'],
+    ]],
+    ['ارتباط با تیم آریوس', [
+      ['documents', 'مدارک پروژه‌ها', 'file'],
+      ['messages', 'گفت‌وگو با تیم', 'messages'],
+      ['support', 'پشتیبانی', 'support'],
+      ['notifications', 'مرکز پیگیری', 'bell'],
+      ['assistant', 'دستیار آریوس', 'assistant'],
+    ]],
+  ],
+  accountant: [
+    ['مالی', [
+      ['finance', 'حسابداری و صورت‌حساب', 'finance'],
+      ['reports', 'گزارش تفصیلی و تأییدها', 'reports'],
+    ]],
+  ],
+  warehouse: [
+    ['انبار', [
+      ['inventory', 'انبار و مصرف پروژه', 'inventory'],
+    ]],
+  ],
+};
+
+/** Grouped destinations for the sidebar, in display order. */
+export function portalGroups(role) {
+  const groups = PORTAL_GROUPS[role] || PORTAL_GROUPS.customer;
+  return groups.map(([title, items]) => ({title, items:items.map(item => [...item])}));
+}
+
+/** `main` stays a flat list so existing access checks and tests keep a single source of truth. */
 export function portalNavigation(role) {
-  if (role === 'warehouse') return {main:[['inventory','انبار و مصرف پروژه','inventory']],links:[]};
-  if (role === 'accountant') return {main:[['finance','حسابداری و صورت‌حساب','finance'],['reports','گزارش تفصیلی و تأییدها','reports']],links:[]};
-  return {
-    main:[['dashboard',role === 'customer' ? 'نمای کلی من' : 'داشبورد','dashboard'],['projects',role === 'customer' ? 'پروژه‌های من' : 'پروژه‌ها','projects'],
-      ...(role !== 'customer' ? [['reports',role === 'worker' ? 'گزارش و مأموریت من' : 'گزارش‌ها و تأییدها','reports'],['voice','صندوق ویس‌ها','assistant'],['inventory',role === 'worker' ? 'مصرف و برگشت کالا' : 'تجهیزات و انبار','inventory']] : []),
-      ...(role === 'manager' ? [['management','ویرایش و بایگانی','settings'],['team','افراد و همکاری','team'],['customers','مشتریان','team'],['leads','درخواست‌های مشاوره','support']] : []),
-      ...(['manager','customer'].includes(role) ? [['finance',role === 'customer' ? 'صورت‌حساب و پرداخت' : 'حسابداری','finance']] : [])],
-    links:[['calendar','تقویم و برنامه‌ریزی','calendar'],['documents','مدارک و فایل‌ها','reports'],['messages','گفت‌وگوها','messages'],['support','مرکز پشتیبانی','support'],['assistant','دستیار آریوس','assistant'],['notifications','مرکز پیگیری','bell']],
-  };
+  const groups = portalGroups(role);
+  return {groups, main:groups.flatMap(group => group.items), links:[]};
 }
