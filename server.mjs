@@ -16,7 +16,7 @@ const localhost = host => ['localhost', '127.0.0.1', '::1', '[::1]', '::ffff:127
 const textValue = (value, name, max = 200, min = 1) => { if (typeof value !== 'string' || value.trim().length < min || value.length > max) fail(`${name} معتبر نیست.`); return value.trim(); };
 const passwordHash = (password, salt) => scryptSync(password, salt, 64).toString('hex');
 const emailValue = email => { const value = textValue(email, 'ایمیل', 254).toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) fail('ایمیل معتبر نیست.'); return value; };
-const passwordValue = password => { if (typeof password !== 'string' || password.length < 12 || password.length > 128) fail('رمز عبور باید بین ۱۲ و ۱۲۸ نویسه باشد.'); return password; };
+const passwordValue = password => { if (typeof password !== 'string' || password.length < 1 || password.length > 128) fail('رمز عبور را وارد کنید؛ هر رمزی مجاز است (حداکثر ۱۲۸ نویسه).'); return password; };
 const mime = { '.html': 'text/html; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.zip': 'application/zip', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json; charset=utf-8' };
 
 /** Standalone, independent ARIOS service. Only ARIOS_* environment variables are read by the CLI. */
@@ -210,7 +210,7 @@ export function createAriosServer(options = {}) {
         if (req.method === 'GET' && path === '/api/session') return json(200, { user: safeUser(session(req)), demo: Boolean(config.demo), capabilities: { ai: hasAI, payments: false } });
         if (req.method === 'POST' && path === '/api/demo-login') {
           if (!config.demo || !localhost(req.socket.remoteAddress)) fail('ورود نمایشی فعال نیست.', 403, 'DEMO_DISABLED');
-          rate(`login:${req.socket.remoteAddress}`, 10, 900000);
+          rate(`demo-login:${req.socket.remoteAddress}`, 60, 900000);
           const payload = await body(req); const user = readState().users.find(user => user.id === payload.userId);
           if (!user) fail('حساب نمایشی یافت نشد.', 404, 'NOT_FOUND');
           issueSession(res, user.id); return json(200, { user: safeUser(user) });

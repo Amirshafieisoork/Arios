@@ -104,13 +104,13 @@ test('manager reset changes only the Auth password, resolves requests and reject
   assert(f.calls.filter(call => call.type === 'session-check').every(call => call.authUserId === 'auth-worker'));
 });
 
-test('reset authorization protects the owner and refuses staff, archived or short-password targets before Auth mutation', async () => {
+test('reset authorization protects the owner and refuses staff, archived or empty-password targets before Auth mutation', async () => {
   const f = fixture();
   for (const role of ['worker', 'customer', 'warehouse', 'accountant']) {
     await assert.rejects(resetAccountPassword(f.client, f.repo, { id: role, role }, { id: 'worker', password: 'simple6' }), error => error.status === 403);
   }
   await assert.rejects(resetAccountPassword(f.client, f.repo, manager, { id: 'manager', password: 'simple6' }), error => error.code === 'MANAGER_ROLE_PROTECTED');
-  await assert.rejects(resetAccountPassword(f.client, f.repo, manager, { id: 'worker', password: '12345' }));
+  await assert.rejects(resetAccountPassword(f.client, f.repo, manager, { id: 'worker', password: '' }));
   await archiveAccount(f.client, f.repo, manager, { id: 'worker' });
   await assert.rejects(resetAccountPassword(f.client, f.repo, manager, { id: 'worker', password: 'simple6' }), error => error.status === 404);
   assert.equal(f.calls.filter(call => call.type === 'reset-auth').length, 0);

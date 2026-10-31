@@ -21,8 +21,8 @@ test('flagged first login shows a required password form and never stores a secr
   assert.equal(f.locations[0][2],'/login/team?change=password');assert(!JSON.stringify(f.locations).includes('temporary-secret'));assert.equal(f.requests.length,0);assert.equal(f.completed.length,0);
   assert.equal(passwordChangeRequired({user:{passwordChangeRequired:true}}),true);assert.equal(passwordChangeRequired({passwordChangeRequired:true}),true);assert.equal(passwordChangeRequired({user:{}}),false);assert.equal(passwordChangeURL('customer'),'/login/client?change=password');assert.equal(passwordChangeURL('https://foreign.invalid'),'/login/team?change=password');
 });
-test('mismatched, short and unchanged passwords cannot advance or submit an update',async()=>{
-  const f=fixture();f.show();for(const [password,confirmation]of [['12345','12345'],['new-secret','other-secret'],['temporary-secret','temporary-secret']]){f.node('[name="newPassword"]').value=password;f.node('[name="confirmPassword"]').value=confirmation;await f.submit();assert.equal(f.requests.length,0);assert.equal(f.completed.length,0);assert.equal(f.node('[data-password-change-error]').hidden,false);}
+test('mismatched, empty and unchanged passwords cannot advance or submit an update',async()=>{
+  const f=fixture();f.show();for(const [password,confirmation]of [['',''],['new-secret','other-secret'],['temporary-secret','temporary-secret']]){f.node('[name="newPassword"]').value=password;f.node('[name="confirmPassword"]').value=confirmation;await f.submit();assert.equal(f.requests.length,0);assert.equal(f.completed.length,0);assert.equal(f.node('[data-password-change-error]').hidden,false);}
 });
 test('new password is submitted with same-origin cookies and secrets are cleared before entering the panel',async()=>{
   const f=fixture();f.show();f.node('[name="newPassword"]').value='new-private-password';f.node('[name="confirmPassword"]').value='new-private-password';await f.submit();

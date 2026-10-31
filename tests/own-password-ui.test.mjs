@@ -28,8 +28,8 @@ test('own password modal sends only current and new passwords and clears fields 
   await ui.modal.onSubmit(form);assert.deepEqual(ui.calls,[{currentPassword:'old-private-password',newPassword:'new-private-password'}]);assert.equal(ui.refreshes,1);assert.match(ui.toasts[0],/تغییر کرد/);
   for(const name of ['currentPassword','newPassword','confirmPassword'])assert.equal(form.get(name),'');assert(Object.values(ui.fields).every(field=>field.value===''));
 });
-test('invalid confirmation, short and unchanged passwords never submit and server failure does not refresh',async t=>{
-  await t.test('invalid fields',async sub=>{const ui=mount(sub);for(const values of [{confirmPassword:'different-password'},{newPassword:'short',confirmPassword:'short'},{newPassword:'old-private-password',confirmPassword:'old-private-password'}])await assert.rejects(ui.modal.onSubmit(data(values)));assert.deepEqual(ui.calls,[]);assert.equal(ui.refreshes,0);});
+test('invalid confirmation, empty and unchanged passwords never submit and server failure does not refresh',async t=>{
+  await t.test('invalid fields',async sub=>{const ui=mount(sub);for(const values of [{confirmPassword:'different-password'},{newPassword:'',confirmPassword:''},{newPassword:'old-private-password',confirmPassword:'old-private-password'}])await assert.rejects(ui.modal.onSubmit(data(values)));assert.deepEqual(ui.calls,[]);assert.equal(ui.refreshes,0);});
   await t.test('server failure',async sub=>{const failing=mount(sub,{error:Error('رمز فعلی درست نیست.')});await assert.rejects(failing.modal.onSubmit(data()),/رمز فعلی/);assert.equal(failing.refreshes,0);assert.deepEqual(failing.toasts,[]);});
 });
 test('unverified password response cannot report success or refresh and API adapter retains same-origin cookies without identity fields',async t=>{

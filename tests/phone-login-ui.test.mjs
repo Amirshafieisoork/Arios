@@ -72,11 +72,11 @@ async function setupPage(t, passwordValue) {
   return { node, calls, assignments, replacements };
 }
 
-test('owner setup accepts a six-character password without composition requirements and clears the setup URL', async t => {
-  const mounted = await setupPage(t, '123456');
+test('owner setup accepts any chosen password without length or composition requirements and clears the setup URL', async t => {
+  const mounted = await setupPage(t, '1');
   assert.deepEqual(mounted.calls, [
-    { url: '/api/bootstrap', payload: { code: 'one-time-test-code', email: 'owner@example.com', password: '123456' } },
-    { url: '/api/login', payload: { email: 'owner@example.com', password: '123456', portal: 'team' } },
+    { url: '/api/bootstrap', payload: { code: 'one-time-test-code', email: 'owner@example.com', password: '1' } },
+    { url: '/api/login', payload: { email: 'owner@example.com', password: '1', portal: 'team' } },
   ]);
   assert.deepEqual(mounted.assignments, ['/portal/?portal=team#dashboard']);
   assert.deepEqual(mounted.replacements, [[null, '', '/setup']]);
@@ -84,10 +84,10 @@ test('owner setup accepts a six-character password without composition requireme
   assert.equal(mounted.node('#setup-confirm').value, '');
 });
 
-test('owner setup rejects passwords below six characters before submitting anything', async t => {
-  const mounted = await setupPage(t, '12345');
+test('owner setup still asks for a non-empty password before submitting anything', async t => {
+  const mounted = await setupPage(t, '');
   assert.deepEqual(mounted.calls, []);
   assert.deepEqual(mounted.assignments, []);
   assert.equal(mounted.node('#setup-error').hidden, false);
-  assert.match(mounted.node('#setup-error').textContent, /۶ نویسه/);
+  assert.match(mounted.node('#setup-error').textContent, /رمز عبور را وارد کنید/);
 });

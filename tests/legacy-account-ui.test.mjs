@@ -47,23 +47,23 @@ test('editing a legacy profile submits only its existing ID and contact/role fie
   assert.deepEqual(ui.mutations,[{action:'account.update',payload:{id:'worker',name:'کارمند قدیمی',phone:'09121234567',role:'worker',username:'',department:'نصب',skill:'شبکه'}}]);
 });
 
-test('explicit activation confirms a six-character password and keeps the same profile ID and role',async t=>{
+test('explicit activation accepts any chosen password and keeps the same profile ID and role',async t=>{
   const ui=mount(t,fixture(),'[data-activate-account]',{activateAccount:'worker'});
   ui.events.click();
   assert.match(ui.modal.body,/name="phone"[^>]*required/);
-  assert.match(ui.modal.body,/name="password"[^>]*minlength="6"/);
+  assert.match(ui.modal.body,/name="password"[^>]*minlength="1"/);
   assert(!ui.modal.body.includes('name="role"'));
   assert(!ui.modal.body.includes('name="projectIds"'));
   assert(!ui.modal.body.includes('name="email"'));
   assert.match(ui.modal.body,/فرد دوباره ثبت نمی‌شود/);
   const data=activationData();data.set('confirmPassword','654321');
   await assert.rejects(ui.modal.onSubmit(data),/یکسان نیستند/);
-  data.set('password','12345');data.set('confirmPassword','12345');
-  await assert.rejects(ui.modal.onSubmit(data),/۶ تا ۱۲۸/);
+  data.set('password','');data.set('confirmPassword','');
+  await assert.rejects(ui.modal.onSubmit(data),/رمز ورود را وارد کنید/);
   assert.equal(ui.mutations.length,0);
-  data.set('password','123456');data.set('confirmPassword','123456');
+  data.set('password','12345');data.set('confirmPassword','12345');
   await ui.modal.onSubmit(data);
-  assert.deepEqual(ui.mutations,[{action:'account.activate',payload:{id:'worker',phone:'۰۹۱۲۱۲۳۴۵۶۷',username:'legacy.worker',password:'123456'}}]);
+  assert.deepEqual(ui.mutations,[{action:'account.activate',payload:{id:'worker',phone:'۰۹۱۲۱۲۳۴۵۶۷',username:'legacy.worker',password:'12345'}}]);
 });
 
 test('warehouse activation requires a username while ordinary worker activation keeps it optional',t=>{
