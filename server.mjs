@@ -11,7 +11,7 @@ const COOKIE = 'arios_session';
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new DomainError(message, status, code); };
-const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'role', 'department', 'skill'].filter(k => user[k] !== undefined).map(k => [k, user[k]])) : null;
+const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'role', 'department', 'skill', 'customerCode'].filter(k => user[k] !== undefined).map(k => [k, user[k]])) : null;
 const localhost = host => ['localhost', '127.0.0.1', '::1', '[::1]', '::ffff:127.0.0.1'].includes(host);
 const textValue = (value, name, max = 200, min = 1) => { if (typeof value !== 'string' || value.trim().length < min || value.length > max) fail(`${name} معتبر نیست.`); return value.trim(); };
 const passwordHash = (password, salt) => scryptSync(password, salt, 64).toString('hex');

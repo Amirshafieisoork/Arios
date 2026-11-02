@@ -4,6 +4,7 @@ import { applyDossierWorkflow } from './approval-workflow.mjs';
 import { applyAdminRecordAction, managementSnapshot } from './admin-records.mjs';
 import { applyCatalogAction, readCatalogs } from './catalogs.mjs';
 import { applyPersonalStockAction, personalStockSnapshot } from './personal-stock.mjs';
+import { assignCustomerCode, dossierCasesForCustomer, dossierNumber, nextDossierNumber, serviceTypeForCode, structuredProjectCode } from './project-coding.mjs';
 import { applyFinanceAction, employeeFinanceSnapshot } from './finance-ledger.mjs';
 import { applyPersonProfile } from './people-profile.mjs';
 import { applyPrimaryManagerTransfer, managementRoleDetails, managementRoleSnapshot } from './management-roles.mjs';
@@ -93,11 +94,19 @@ export function normalizeProjectCode(value) {
   return typeof value === 'string' ? value.normalize('NFKC').replace(/[۰-۹]/g,char=>String(char.charCodeAt(0)-1776)).replace(/[٠-٩]/g,char=>String(char.charCodeAt(0)-1632)).replace(/[\u200c\u200e\u200f]/g,'').trim().toUpperCase() : '';
 }
 function projectMetadata(state, payload, previous = {}) {
-  const fields = ['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','reviewChain'];
+  const fields = ['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','serviceCode','reviewChain'];
   const values = {...pick(previous,fields),...pick(payload,fields)};
   const projectCode = normalizeProjectCode(text(values.projectCode,'کد پروژه',{max:80}));
   if (!projectCode || /[\u0000-\u001f\u007f]/.test(projectCode)) fail('کد پروژه معتبر نیست.');
   if (state.projects.some(project => project.id !== previous.id && normalizeProjectCode(project.projectCode) === projectCode)) fail('این کد قبلاً برای پروژهٔ دیگری ثبت شده است.',409,'DUPLICATE_PROJECT_CODE');
+  const customerCode=normalizeProjectCode(text(values.customerCode,'شماره مشتری',{optional:true,max:80}));
+  const dossierCode=normalizeProjectCode(text(values.dossierCode,'شماره پرونده',{optional:true,max:80}));
+  const serviceCode=normalizeProjectCode(text(values.serviceCode,'کد فعالیت',{optional:true,max:3}));
+  if(serviceCode){
+    const service=serviceTypeForCode(serviceCode);
+    const dossier=dossierNumber(dossierCode,customerCode);
+    if(!service||!/^\d{5}$/.test(customerCode)||Number(customerCode)<10000||Number(customerCode)>99999||!dossier||projectCode!==`${customerCode}-${dossier}-${service.code}-${projectCode.split('-').at(-1)}`||!/^\d{3}$/.test(projectCode.split('-').at(-1))||Number(projectCode.split('-').at(-1))<1)fail('کد پروژه باید از کد مشتری، پرونده، نوع خدمات و شمارهٔ سه‌رقمی ساخته شود.');
+  }
   const lead = find(state.users,text(values.projectManagerId,'مسئول پروژه',{max:120}),'مسئول پروژه');
   if (lead.deletedAt || !['manager','worker'].includes(lead.role)) fail('مسئول پروژه باید مدیر یا نیروی اجرایی فعال باشد.');
   if (!Array.isArray(values.reviewChain) || values.reviewChain.length !== 6) fail('مسئول هر شش مرحلهٔ تأیید را تعیین کنید.');
@@ -108,7 +117,7 @@ function projectMetadata(state, payload, previous = {}) {
     if (index === 0 && person.id !== lead.id) fail('نخستین تأیید باید با مسئول پروژه باشد.');
     return {label:PROJECT_APPROVAL_LABELS[index],userId:person.id};
   });
-  return {projectCode,projectManagerId:lead.id,reviewChain,customerCode:normalizeProjectCode(text(values.customerCode,'شماره مشتری',{optional:true,max:80})),dossierCode:normalizeProjectCode(text(values.dossierCode,'شماره پرونده',{optional:true,max:80})),dossierTitle:text(values.dossierTitle,'عنوان پرونده',{optional:true,max:200})};
+  return {projectCode,projectManagerId:lead.id,reviewChain,customerCode,dossierCode:serviceCode?dossierNumber(dossierCode,customerCode):dossierCode,dossierTitle:text(values.dossierTitle,'عنوان پرونده',{optional:true,max:200}),...(serviceCode?{serviceCode}:{})};
 }
 function requireProject(state, user, projectId) {
   if (!projectAccess(state, user, projectId)) fail('به این پروژه دسترسی ندارید.', 403, 'FORBIDDEN');
@@ -146,7 +155,7 @@ function audit(state, actor, action, entity, description) {
   state.audit.push({ id: id('a'), actorId: actor.id, action, entityId: entity.id, createdAt: now(), description });
 }
 function safeUser(user, includeRates = false) {
-  const result = pick(user, ['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'deletedAt']);
+  const result = pick(user, ['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'customerCode', 'deletedAt']);
   if (internalAuthEmail(result.email)) delete result.email;
   if (includeRates) Object.assign(result, pick(user, ['hourlyRate', 'rateHistory']));
   return result;
@@ -232,7 +241,7 @@ export function publicState(state, userId) {
     projects: projects.map(project => {
       if (isWarehouse) return pick(project, ['id', 'name', 'type', 'status', 'projectCode']);
       const item = pick(project, isAccountant ? ['id', 'name', 'type', 'customerId', 'memberIds', 'status', 'progress', 'startDate', 'endDate', 'cover'] : ['id', 'name', 'type', 'customerId', 'memberIds', 'contactIds', 'location', 'status', 'progress', 'startDate', 'endDate', 'description', 'phases', 'cover', 'clientNote']);
-      Object.assign(item,pick(project,['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle']));
+      Object.assign(item,pick(project,['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','serviceCode']));
       item.canRecordWork = ['manager','worker'].includes(user.role) && canExecute(project.id);
       if (finance || isWorker) {
         item.dossierVersion = project.dossier?.version || 0;
@@ -271,6 +280,7 @@ export function publicState(state, userId) {
   };
   if(isManager)result.management=managementSnapshot(state,user);
   if(isManager)result.managementRoles=managementRoleSnapshot(state,user);
+  if(isManager)result.customerDossiers=(Array.isArray(state.customerDossiers)?state.customerDossiers:[]).map(item=>pick(item,['id','customerId','customerCode','dossierCode','title','createdAt']));
   if(user.role!=='customer'){result.personalStock=personalStockSnapshot(state,user);result.employeeFinance=employeeFinanceSnapshot(state,user);}
   return result;
 }
@@ -341,9 +351,38 @@ export function applyAction(state, userId, action, payload = {}) {
   } else if (action === 'project.create') {
     manager(user);
     const name = text(payload.name, 'نام پروژه', { max: 160 });
-    const type = text(payload.type, 'نوع پروژه', { max: 80 });
     const customerId = payload.customerId || null;
     if (customerId && (() => { const person = find(draft.users, customerId, 'مشتری'); return person.deletedAt || person.role !== 'customer'; })()) fail('حساب انتخابی مشتری نیست.');
+    let type, metadataPayload=payload;
+    if(payload.serviceCode!==undefined){
+      if(!customerId)fail('برای ساخت کد استاندارد پروژه، مشتری را انتخاب کنید.');
+      const service=serviceTypeForCode(payload.serviceCode);
+      if(!service)fail('نوع خدمات پروژه را از فهرست کدینگ انتخاب کنید.');
+      let customerCode,cases,nextDossier,selectedDossier,generated;
+      try{
+        customerCode=assignCustomerCode(draft,customerId,payload.customerCode||'');
+        cases=dossierCasesForCustomer(draft,customerId);
+        selectedDossier=dossierNumber(payload.dossierCode,customerCode);
+        if(selectedDossier&&!cases.some(item=>item.code===selectedDossier)){
+          nextDossier=nextDossierNumber(draft,customerId);
+          if(selectedDossier!==nextDossier)fail('شمارهٔ پروندهٔ انتخاب‌شده برای این مشتری معتبر نیست.');
+        }
+        selectedDossier||=nextDossierNumber(draft,customerId);
+        generated=structuredProjectCode(draft,customerId,selectedDossier,service.code);
+      }catch(error){if(error?.code)throw error;fail(error.message||'کدگذاری پروژه انجام نشد.');}
+      if(payload.customerCode&&normalizeProjectCode(payload.customerCode)!==customerCode)fail('کد مشتری تغییر کرده است؛ فرم را تازه کنید.',409,'PROJECT_CODE_STALE');
+      if(payload.projectCode&&normalizeProjectCode(payload.projectCode)!==generated.projectCode)fail('شمارهٔ پروژه هم‌زمان تغییر کرده است؛ فرم را تازه کنید و دوباره ثبت کنید.',409,'PROJECT_CODE_STALE');
+      const existingCase=cases.find(item=>item.code===selectedDossier);
+      const submittedTitle=text(payload.dossierTitle,'نام پرونده',{max:200});
+      if(existingCase?.title&&submittedTitle&&existingCase.title!==submittedTitle)fail('عنوان پروندهٔ موجود قابل تغییر از فرم ایجاد پروژه نیست.');
+      const dossierTitle=existingCase?.title||submittedTitle;
+      draft.customerDossiers||=[];
+      const registeredCase=draft.customerDossiers.find(item=>item.customerId===customerId&&dossierNumber(item.dossierCode,customerCode)===selectedDossier);
+      if(!registeredCase)draft.customerDossiers.push({id:id('case'),customerId,customerCode,dossierCode:selectedDossier,title:dossierTitle,createdAt:now(),createdBy:user.id});
+      else if(!registeredCase.title&&dossierTitle)registeredCase.title=dossierTitle;
+      type=service.label;
+      metadataPayload={...payload,...generated,customerId,customerCode,dossierCode:selectedDossier,dossierTitle,serviceCode:service.code};
+    }else type=text(payload.type,'نوع پروژه',{max:80});
     if (!Array.isArray(payload.memberIds) || payload.memberIds.some(memberId => typeof memberId !== 'string')) fail('اعضای پروژه معتبر نیستند.');
     const memberIds = [...new Set(payload.memberIds)];
     for (const memberId of memberIds) if ((() => { const person = find(draft.users, memberId, 'نیرو'); return person.deletedAt || person.role !== 'worker'; })()) fail('فقط نیروی اجرایی به پروژه تخصیص دهید.');
@@ -352,12 +391,12 @@ export function applyAction(state, userId, action, payload = {}) {
     if (endDate < startDate) fail('پایان پروژه نباید پیش از شروع باشد.');
     const cover = /event|مراسم|همایش/i.test(type) ? 'event' : /electric|برق/i.test(type) ? 'electric' : /media|رسانه/i.test(type) ? 'media' : 'building';
     result = { id: id('p'), name, type, customerId, memberIds, location: text(payload.location, 'موقعیت', { max: 240 }), status: 'active', progress: 0, budget: integer(payload.budget, 'بودجه'), contractAmount: integer(payload.contractAmount, 'مبلغ قرارداد'), startDate, endDate, description: text(payload.description, 'شرح پروژه', { optional: true }), phases: ['برنامه‌ریزی', 'اجرا', 'آزمایش و تحویل'].map(name => ({ id: id('ph'), name, progress: 0 })), cover, clientNote: '', publicVisible: bool(payload.publicVisible), publicTitle: text(payload.publicTitle, 'عنوان عمومی', { optional: true, max: 160 }), publicSummary: text(payload.publicSummary, 'شرح عمومی', { optional: true, max: 1000 }) };
-    Object.assign(result,projectMetadata(draft,payload));
+    Object.assign(result,projectMetadata(draft,metadataPayload));
     draft.projects.push(result); audit(draft, user, action, result, 'پروژه ایجاد شد.');
   } else if (action === 'project.update') {
     manager(user);
     const project = find(draft.projects, payload.id, 'پروژه');
-    for(const [key,label,max] of [['name','نام پروژه',160],['type','نوع پروژه',80],['location','موقعیت',240]])if(payload[key]!==undefined)project[key]=text(payload[key],label,{max});
+    for(const [key,label,max] of [['name','نام پروژه',160],['type','نوع پروژه',80],['location','موقعیت',240]])if(payload[key]!==undefined){const value=text(payload[key],label,{max});if(key==='type'&&project.serviceCode&&value!==project.type)fail('نوع خدمات پروژهٔ کدگذاری‌شده همراه کد رسمی تغییر نمی‌کند.');project[key]=value;}
     if(payload.description!==undefined)project.description=text(payload.description,'شرح پروژه',{optional:true});
     if(payload.budget!==undefined)project.budget=integer(payload.budget,'بودجه');
     if(payload.contractAmount!==undefined)project.contractAmount=integer(payload.contractAmount,'مبلغ قرارداد');
@@ -368,9 +407,10 @@ export function applyAction(state, userId, action, payload = {}) {
       if(!Array.isArray(payload.phases)||payload.phases.length>50)fail('حداکثر ۵۰ مرحله برای پروژه ثبت کنید.');
       const phaseIds=new Set();project.phases=payload.phases.map(phase=>{if(!record(phase))fail('مرحلهٔ پروژه معتبر نیست.');const phaseId=phase.id?text(phase.id,'شناسهٔ مرحله',{max:120}):id('ph');if(phaseIds.has(phaseId))fail('شناسهٔ مراحل تکراری است.');phaseIds.add(phaseId);return{id:phaseId,name:text(phase.name,'نام مرحله',{max:160}),progress:integer(phase.progress??0,'پیشرفت مرحله',0,100)};});
     }
-    if (['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','reviewChain'].some(key=>payload[key]!==undefined)) Object.assign(project,projectMetadata(draft,payload,project));
+    if (['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','serviceCode','reviewChain'].some(key=>payload[key]!==undefined)) Object.assign(project,projectMetadata(draft,payload,project));
     if (payload.customerId !== undefined) {
       const customerId = payload.customerId === null || payload.customerId === '' ? null : text(payload.customerId, 'مشتری', { max: 100 });
+      if (project.serviceCode && customerId !== project.customerId) fail('مشتری پروژهٔ کدگذاری‌شده همراه کد رسمی تغییر نمی‌کند؛ پروژهٔ تازه‌ای با مشتری جدید بسازید.');
       if (customerId && (() => { const person = find(draft.users, customerId, 'مشتری'); return person.deletedAt || person.role !== 'customer'; })()) fail('حساب انتخابی مشتری نیست.');
       project.customerId = customerId;
     }
@@ -768,7 +808,7 @@ export function createSeedState() {
     { id: 'r4', projectId: 'p2', workerId: 'worker2', date: '2026-10-18', start: '09:00', end: '11:00', breakMinutes: 0, description: 'بازدید سالن و بررسی جایگاه نور و صدا.', output: 'چک‌لیست تجهیزات و نقشه اولیه آماده شد.', status: 'submitted', minutes: 120, createdAt: '2026-10-18T07:45:00.000Z', version: 1, rate: 130000, laborCost: 0 },
   ];
   return {
-    schemaVersion: 1, users, projects, reports,
+    schemaVersion: 1, users, projects, reports, customerDossiers: [],
     materials: [
       { id: 'm1', projectId: 'p1', name: 'دوربین تحت شبکه', quantity: 8, unit: 'عدد', unitPrice: 3600000, clientVisible: true, date: '2026-10-12', inventoryId: 'inv1' },
       { id: 'm2', projectId: 'p1', name: 'کابل شبکه Cat6', quantity: 180, unit: 'متر', unitPrice: 28000, clientVisible: true, date: '2026-10-15', inventoryId: 'inv2' },
