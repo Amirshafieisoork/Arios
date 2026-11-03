@@ -107,9 +107,18 @@ export function createBff({env=process.env,fetcher=fetch}={}){return async reque
   }else session=await authRequest(c,'token?grant_type=password',{email:identity.email,password:body.password},fetcher);
   if(typeof session.access_token!=='string'||!session.access_token||typeof session.refresh_token!=='string'||!session.refresh_token)fail('پاسخ ورود معتبر نیست.',502);
   const verified=await edgeRequest(c,'/session',new Request(request.url,{method:'GET'}),session.access_token,fetcher);
-  if(!verified.response.ok||!verified.data.user||!['manager','worker','customer','warehouse','accountant'].includes(verified.data.user.role)){
+  if(!verified.response.ok){
    await fetcher(c.url+'/auth/v1/logout',{method:'POST',headers:{apikey:c.key,Authorization:'Bearer '+session.access_token},redirect:'manual'}).catch(()=>{});
-   fail('این حساب به فضای کار آریوس دسترسی ندارد.',403,'NOT_A_MEMBER');
+   const upstreamCode=typeof verified.data?.code==='string'&&/^[A-Z0-9_]{1,64}$/.test(verified.data.code)?verified.data.code:'';
+   const message=typeof verified.data?.error==='string'&&verified.data.error.length<=300?verified.data.error:'';
+   const status=verified.response.status>=500?503:verified.response.status;
+   const code=status>=500?(upstreamCode&&upstreamCode!=='NOT_A_MEMBER'?upstreamCode:'BACKEND_UNAVAILABLE'):upstreamCode==='NOT_A_MEMBER'&&status!==403?(status===401?'INVALID_SESSION':'SESSION_VERIFICATION_FAILED'):upstreamCode||(status===429?'RATE_LIMITED':status===401?'INVALID_SESSION':status===403?'FORBIDDEN':'SESSION_VERIFICATION_FAILED');
+   const error=status>=500&&upstreamCode==='NOT_A_MEMBER'?'بررسی دسترسی حساب موقتاً انجام نشد؛ دوباره تلاش کنید.':message||'بررسی دسترسی حساب کامل نشد؛ دوباره تلاش کنید.';
+   fail(error,status,code);
+  }
+  if(!verified.data?.user||!['manager','worker','customer','warehouse','accountant'].includes(verified.data.user.role)){
+   await fetcher(c.url+'/auth/v1/logout',{method:'POST',headers:{apikey:c.key,Authorization:'Bearer '+session.access_token},redirect:'manual'}).catch(()=>{});
+   fail('ورود پذیرفته شد، اما پاسخ بررسی عضویت معتبر نبود. دوباره تلاش کنید و کد LOGIN_SESSION_CHECK_FAILED را به پشتیبانی بدهید.',502,'LOGIN_SESSION_CHECK_FAILED');
   }
   const portal=verified.data.user.role==='customer'?'client':'team';
   return json({...verified.data,portal},200,sessionCookies(session,secure));
