@@ -55,6 +55,14 @@ test('failed phone login leaves a retryable error and does not navigate', async 
   assert(!mounted.node('#login-error').textContent.includes('private-provider-error'));
 });
 
+test('unmapped login failures show only the safe diagnostic code and HTTP status', async t => {
+  const mounted = await loginPage(t, { pathname: '/login/team', result: { code: 'STORAGE_UNAVAILABLE', error: 'بررسی دسترسی حساب کامل نشد؛ دوباره تلاش کنید.' }, status: 503 });
+  assert.deepEqual(mounted.assignments, []);
+  assert.match(mounted.node('#login-error').textContent, /STORAGE_UNAVAILABLE/);
+  assert.match(mounted.node('#login-error').textContent, /HTTP 503/);
+  assert(!mounted.node('#login-error').textContent.includes('private-provider-error'));
+});
+
 async function setupPage(t, passwordValue) {
   const nodes = new Map(), calls = [], assignments = [], replacements = [];
   const node = selector => { if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); };
