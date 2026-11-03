@@ -9,7 +9,7 @@ export class APIError extends Error {
   }
 }
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
-export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'customerCode', 'deletedAt', 'managementRole', 'managementTitle', 'passwordChangeRequired'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
+export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'deletedAt', 'managementRole', 'managementTitle', 'passwordChangeRequired'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
 export function text(value, label, max = 4000) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) fail(`${label} معتبر نیست.`);
   return value.trim();
@@ -20,7 +20,7 @@ export function emailValue(value) {
   return email;
 }
 export function passwordValue(value) {
-  if (typeof value !== 'string' || value.length < 1 || value.length > 128) fail('رمز عبور را وارد کنید؛ هر رمزی مجاز است (حداکثر ۱۲۸ نویسه).');
+  if (typeof value !== 'string' || value.length < 6 || value.length > 128) fail('رمز عبور باید بین ۶ و ۱۲۸ نویسه باشد.');
   return value;
 }
 export function manager(user) {

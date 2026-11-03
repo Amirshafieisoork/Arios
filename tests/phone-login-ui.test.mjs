@@ -55,14 +55,6 @@ test('failed phone login leaves a retryable error and does not navigate', async 
   assert(!mounted.node('#login-error').textContent.includes('private-provider-error'));
 });
 
-test('unmapped login failures show only the safe diagnostic code and HTTP status', async t => {
-  const mounted = await loginPage(t, { pathname: '/login/team', result: { code: 'STORAGE_UNAVAILABLE', error: 'بررسی دسترسی حساب کامل نشد؛ دوباره تلاش کنید.' }, status: 503 });
-  assert.deepEqual(mounted.assignments, []);
-  assert.match(mounted.node('#login-error').textContent, /STORAGE_UNAVAILABLE/);
-  assert.match(mounted.node('#login-error').textContent, /HTTP 503/);
-  assert(!mounted.node('#login-error').textContent.includes('private-provider-error'));
-});
-
 async function setupPage(t, passwordValue) {
   const nodes = new Map(), calls = [], assignments = [], replacements = [];
   const node = selector => { if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); };
@@ -80,11 +72,11 @@ async function setupPage(t, passwordValue) {
   return { node, calls, assignments, replacements };
 }
 
-test('owner setup accepts any chosen password without length or composition requirements and clears the setup URL', async t => {
-  const mounted = await setupPage(t, '1');
+test('owner setup accepts a six-character password without composition requirements and clears the setup URL', async t => {
+  const mounted = await setupPage(t, '123456');
   assert.deepEqual(mounted.calls, [
-    { url: '/api/bootstrap', payload: { code: 'one-time-test-code', email: 'owner@example.com', password: '1' } },
-    { url: '/api/login', payload: { email: 'owner@example.com', password: '1', portal: 'team' } },
+    { url: '/api/bootstrap', payload: { code: 'one-time-test-code', email: 'owner@example.com', password: '123456' } },
+    { url: '/api/login', payload: { email: 'owner@example.com', password: '123456', portal: 'team' } },
   ]);
   assert.deepEqual(mounted.assignments, ['/portal/?portal=team#dashboard']);
   assert.deepEqual(mounted.replacements, [[null, '', '/setup']]);
@@ -92,10 +84,10 @@ test('owner setup accepts any chosen password without length or composition requ
   assert.equal(mounted.node('#setup-confirm').value, '');
 });
 
-test('owner setup still asks for a non-empty password before submitting anything', async t => {
-  const mounted = await setupPage(t, '');
+test('owner setup rejects passwords below six characters before submitting anything', async t => {
+  const mounted = await setupPage(t, '12345');
   assert.deepEqual(mounted.calls, []);
   assert.deepEqual(mounted.assignments, []);
   assert.equal(mounted.node('#setup-error').hidden, false);
-  assert.match(mounted.node('#setup-error').textContent, /رمز عبور را وارد کنید/);
+  assert.match(mounted.node('#setup-error').textContent, /۶ نویسه/);
 });

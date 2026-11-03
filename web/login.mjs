@@ -36,7 +36,7 @@ form.addEventListener('submit',async event=>{
  try{
   const response=await fetch('/api/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({identifier:form.elements.identifier.value.trim(),password:password.value,portal})});
   let data;try{data=await response.json();}catch{throw new Error('پاسخ سرویس ورود قابل دریافت نیست. چند لحظه بعد دوباره امتحان کنید.');}
-  if(!response.ok){const raw=typeof data.error==='string'?data.error:data.error?.message,code=typeof data.code==='string'&&/^[A-Z0-9_]{1,64}$/.test(data.code)?data.code:'',known=messages[code],message=known||(response.status===429?messages.RATE_LIMITED:raw||'ورود انجام نشد. اطلاعات حساب را بررسی کنید.');throw new Error((message||'ورود انجام نشد.')+(!known&&code?' (کد: '+code+'، HTTP '+response.status+')':''));}
+  if(!response.ok){const raw=typeof data.error==='string'?data.error:data.error?.message;throw new Error(messages[data.code]||(response.status===429?messages.RATE_LIMITED:raw||'ورود انجام نشد. اطلاعات حساب را بررسی کنید.'));}
   if(!data.user)throw new Error('ورود تأیید نشد. لطفاً دوباره امتحان کنید.');
   if(!['manager','worker','customer','warehouse','accountant'].includes(data.user.role))throw new Error('دسترسی حساب شما هنوز آماده نیست. با مدیر آریوس هماهنگ کنید.');
   const temporaryPassword=password.value;password.value='';label.textContent='ورود انجام شد';

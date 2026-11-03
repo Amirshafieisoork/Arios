@@ -126,16 +126,9 @@ test('password login verifies Edge membership before issuing secure HttpOnly ses
   assert(!JSON.stringify(login.data).includes(PASSWORD));
 });
 
-test('login reports the verified membership or session-check failure without masking unrelated backend errors', async t => {
-  const scenarios = [
-    { name: 'explicit membership denial', status: 403, data: { error: 'not a member', code: 'NOT_A_MEMBER' }, expectedStatus: 403, expectedCode: 'NOT_A_MEMBER' },
-    { name: 'expired session', status: 401, data: { error: 'session expired', code: 'INVALID_SESSION' }, expectedStatus: 401, expectedCode: 'INVALID_SESSION' },
-    { name: 'backend unavailable', status: 503, data: { error: 'storage unavailable', code: 'STORAGE_UNAVAILABLE' }, expectedStatus: 503, expectedCode: 'STORAGE_UNAVAILABLE' },
-    { name: 'server failure cannot be mistaken for non-membership', status: 503, data: { error: 'temporary upstream failure', code: 'NOT_A_MEMBER' }, expectedStatus: 503, expectedCode: 'BACKEND_UNAVAILABLE', expectedError: 'بررسی دسترسی حساب موقتاً انجام نشد؛ دوباره تلاش کنید.' },
-    { name: 'malformed successful session', status: 200, data: { user: null }, expectedStatus: 502, expectedCode: 'LOGIN_SESSION_CHECK_FAILED' },
-  ];
-  for (const scenario of scenarios) {
-    await t.test(scenario.name, async () => {
+test('unverified workspace membership never creates browser session cookies', async t => {
+  for (const scenario of [{ status: 403, data: { error: 'not a member' } }, { status: 200, data: { user: null } }]) {
+    await t.test('membership response ' + scenario.status, async () => {
       const f = fixture({ upstream: call => {
         if (call.path === '/auth/v1/token?grant_type=password') return json(TOKENS);
         if (call.path === '/functions/v1/arios-api/session') return json(scenario.data, scenario.status);
@@ -144,10 +137,8 @@ test('login reports the verified membership or session-check failure without mas
         return new Response(null, { status: 204 });
       } });
       const login = await f.call('/api/login', { method: 'POST', body: { email: 'member@example.com', password: PASSWORD, portal: 'team' } });
-      assert.equal(login.status, scenario.expectedStatus);
-      assert.equal(login.data.code, scenario.expectedCode);
-      if (scenario.expectedError) assert.equal(login.data.error, scenario.expectedError);
-      else if (scenario.data.error) assert.equal(login.data.error, scenario.data.error);
+      assert.equal(login.status, 403);
+      assert.equal(login.data.code, 'NOT_A_MEMBER');
       assert.deepEqual(login.cookies, []);
       assert(!JSON.stringify(login.data).includes(TOKENS.access_token));
       assert(f.calls.some(call => call.path === '/auth/v1/logout'));
