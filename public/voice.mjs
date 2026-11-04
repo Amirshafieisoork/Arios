@@ -82,7 +82,7 @@ function projectOptions(state,ctx,selected='',placeholder='انتخاب نشده
   return `<option value="">${placeholder}</option>${state.projects.map(p=>`<option value="${ctx.e(p.id)}" ${selected===p.id?'selected':''}>${ctx.e(p.name)}</option>`).join('')}`;
 }
 function statusBadge(value){return `<span class="badge ${value==='submitted'?'green':value==='ready'?'blue':value==='failed'?'red':'gold'}"><i></i>${statusLabels[value]||'وضعیت نامشخص'}</span>`;}
-function intro(ctx){return `<div class="page-head"><div><div class="eyebrow">ARIOS WORKSPACE</div><h1 class="page-title">ویس‌ها و گزارش صوتی</h1><p class="page-subtitle">ویس‌های تازه، موارد نیازمند بررسی و گزارش‌های ثبت‌شده؛ هرکدام در جای مشخص.</p></div><div class="actions"><button type="button" class="button primary" data-voice-compose>+ گزارش جدید با ویس یا متن</button><a class="button secondary" href="#reports">گزارش‌ها و تأییدها</a><button class="button secondary" data-voice-reload>${ctx.icon('clock')}تازه‌سازی</button></div></div>`;}
+function intro(ctx){return `<div class="page-head"><div><div class="eyebrow">ARIOS / VOICE REPORTS</div><h1 class="page-title">ویس‌ها و گزارش صوتی</h1><p class="page-subtitle">ویس‌های تازه، موارد نیازمند بررسی و گزارش‌های ثبت‌شده؛ هرکدام در جای مشخص.</p></div><div class="actions"><button type="button" class="button primary" data-voice-compose>+ گزارش جدید با ویس یا متن</button><a class="button secondary" href="#reports">گزارش‌های کار</a><button class="button secondary" data-voice-reload>${ctx.icon('clock')}تازه‌سازی</button></div></div>`;}
 function diagnostics(m,ctx){
  if(m.testing)return '<p class="notice" role="status">در حال بررسی ساخت گزارش و تبدیل گفتار…</p>';
  if(!m.diagnostics)return '';

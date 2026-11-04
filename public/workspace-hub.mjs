@@ -7,7 +7,7 @@ const text = value => latinDigits(value).replace(/ي/g,'ی').replace(/ك/g,'ک')
 const validISO = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value + 'T12:00:00Z').toISOString().slice(0,10) === value;
 const amounts = invoices => invoices.reduce((sum,invoice) => ({issued:sum.issued + (Number(invoice.amount) || 0),paid:sum.paid + (Number(invoice.paid) || 0),due:sum.due + Math.max(0,(Number(invoice.amount) || 0) - (Number(invoice.paid) || 0))}),{issued:0,paid:0,due:0});
 const todayISO = () => new Intl.DateTimeFormat('en-CA-u-ca-gregory-nu-latn',{year:'numeric',month:'2-digit',day:'2-digit',timeZone:'Asia/Tehran'}).format(new Date());
-const modes = {customers:['مشتریان و فروش','حساب‌های واقعی مشتریان، پروژه‌ها و وضعیت صورت‌حساب‌ها'],calendar:['تقویم و برنامه‌ریزی','شروع و تحویل پروژه‌ها، موعد وظایف و گزارش‌های ثبت‌شده'],documents:['مدارک پروژه‌ها','همهٔ فایل‌های پروژه‌هایی که به آن‌ها دسترسی دارید؛ هر فایل از پروندهٔ همان پروژه هم در دسترس است']};
+const modes = {customers:['مشتریان و پیگیری فروش','حساب‌های واقعی مشتریان، پروژه‌ها و وضعیت صورت‌حساب‌ها'],calendar:['تقویم و برنامه‌ریزی','شروع و تحویل پروژه‌ها، موعد وظایف و گزارش‌های ثبت‌شده'],documents:['مدارک و فایل‌ها','فایل‌های پروژه‌هایی که به آن‌ها دسترسی دارید']};
 const projectURL = (id,tab = 'overview') => `#project/${encodeURIComponent(id)}/${tab}`;
 
 /** Derive from the scoped snapshot only; no new customer or sales stage is inferred. */
@@ -130,9 +130,9 @@ export function workspaceNextActions(state,{today=todayISO()}={}) {
  const role=state?.user?.role,reports=rows(state?.reports),projects=rows(state?.projects);
  if(role==='manager')return [
   {href:'#reports',title:'گزارش‌ها و تأییدها',detail:reports.some(r=>r.status==='submitted')?'گزارش‌های روزانهٔ منتظر بررسی را تأیید یا برای اصلاح برگردانید.':'گزارش روزانه و پروندهٔ تفصیلی پروژه‌ها را یک‌جا پیگیری کنید.',count:reports.filter(r=>r.status==='submitted').length,label:'گزارش منتظر بررسی',icon:'reports'},
-  {href:'#voice',title:'ویس‌ها و گزارش صوتی',detail:'صوت، متن تبدیل‌شده و پیش‌نویس؛ مرتب بر اساس مرحلهٔ آماده‌سازی.',icon:'assistant'},
-  {href:'#team',title:'افراد و همکاری',detail:'حساب، مشخصات همکاری، نرخ کارکرد و مسئولیت‌های هر فرد.',icon:'team'},
-  {href:'#finance',title:'حسابداری و صورت‌حساب',detail:'دریافت و پرداخت پروژه، حساب همکاران و ماندهٔ تنخواه.',icon:'finance'},
+  {href:'#voice',title:'صندوق ویس‌های تیم',detail:'صوت، متن تبدیل‌شده و پیش‌نویس؛ مرتب بر اساس مرحلهٔ آماده‌سازی.',icon:'assistant'},
+  {href:'#team',title:'افراد و اطلاعات همکاری',detail:'حساب، مشخصات همکاری، نرخ کارکرد و مسئولیت‌های هر فرد.',icon:'team'},
+  {href:'#finance',title:'حساب‌ها، مساعده و تنخواه',detail:'دریافت و پرداخت پروژه، حساب همکاران و ماندهٔ تنخواه.',icon:'finance'},
  ];
  if(role==='worker') {
   const tasks=projects.flatMap(project=>rows(project.tasks).filter(task=>task.assigneeId===state.user.id&&rows(project.memberIds).includes(state.user.id)&&['open','in_progress'].includes(task.status))),due=tasks.filter(task=>task.dueDate&&task.dueDate<=today),changes=reports.filter(report=>report.workerId===state.user.id&&report.status==='changes_requested');

@@ -1,7 +1,6 @@
 import {buildDossierSummary} from './dossier-model.mjs';
 import {renderReportAttachments,wireReportAttachments} from './project-workspace.mjs';
 import {installPersianDateInputs} from './dates.mjs';
-import {dossierNumber} from './project-coding.mjs';
 
 const list = value => Array.isArray(value) ? value : [];
 const views = new Map();
@@ -59,8 +58,7 @@ function loadFrozen(state,project,descriptor,ctx,retry=false) {
 function summaryHeader(summary,submission,ctx) {
   const p=summary.project||{};
   const entry=(label,value)=>`<div><dt>${label}</dt><dd>${value||'ثبت نشده'}</dd></div>`;
-  const dossier=dossierNumber(p.dossierCode,p.customerCode)?`${p.customerCode}-${dossierNumber(p.dossierCode,p.customerCode)}`:p.dossierCode;
-  return `<header class="dossier-heading"><div><span class="eyebrow">ARIOS / پروندهٔ پروژه</span><h2>گزارش تفصیلی پروژه</h2><p>${ctx.e(p.dossierTitle||p.name||'پروژه')}</p></div><span class="dossier-status is-${ctx.e(submission?.status||'draft')}">${statuses[submission?.status||'draft']}</span></header><dl class="dossier-identification">${entry('کد پروژه',`<bdi dir="ltr">${ctx.e(p.projectCode||'ثبت نشده')}</bdi>`)}${entry('شماره پرونده',ctx.e(dossier))}${entry('شماره مشتری',ctx.e(p.customerCode))}${entry('نام مشتری',ctx.e(summary.customer?.name))}${p.serviceCode?entry('نوع خدمات',ctx.e(p.serviceCode)):''}${summary.financial&&summary.customer?.phone?entry('تماس مشتری',`<bdi>${ctx.e(summary.customer.phone)}</bdi>`):''}${entry('مسئول پروژه',ctx.e(summary.lead?.name))}${entry('شروع پروژه',p.startDate?ctx.date(p.startDate):'')}${entry('تحویل برنامه‌ریزی‌شده',p.endDate?ctx.date(p.endDate):'')}${entry('دورهٔ گزارش',`${summary.from?ctx.date(summary.from):'از ابتدا'} تا ${summary.to?ctx.date(summary.to):'آخرین ثبت'}`)}${entry('تاریخ صدور',submission?ctx.e(moment(submission.submittedAt||submission.createdAt)):'هنوز ارسال نشده')}</dl>`;
+  return `<header class="dossier-heading"><div><span class="eyebrow">ARIOS / پروندهٔ پروژه</span><h2>گزارش تفصیلی پروژه</h2><p>${ctx.e(p.dossierTitle||p.name||'پروژه')}</p></div><span class="dossier-status is-${ctx.e(submission?.status||'draft')}">${statuses[submission?.status||'draft']}</span></header><dl class="dossier-identification">${entry('کد پروژه',`<bdi dir="ltr">${ctx.e(p.projectCode||'ثبت نشده')}</bdi>`)}${entry('شماره پرونده',ctx.e(p.dossierCode))}${entry('شماره مشتری',ctx.e(p.customerCode))}${entry('نام مشتری',ctx.e(summary.customer?.name))}${summary.financial&&summary.customer?.phone?entry('تماس مشتری',`<bdi>${ctx.e(summary.customer.phone)}</bdi>`):''}${entry('مسئول پروژه',ctx.e(summary.lead?.name))}${entry('شروع پروژه',p.startDate?ctx.date(p.startDate):'')}${entry('تحویل برنامه‌ریزی‌شده',p.endDate?ctx.date(p.endDate):'')}${entry('دورهٔ گزارش',`${summary.from?ctx.date(summary.from):'از ابتدا'} تا ${summary.to?ctx.date(summary.to):'آخرین ثبت'}`)}${entry('تاریخ صدور',submission?ctx.e(moment(submission.submittedAt||submission.createdAt)):'هنوز ارسال نشده')}</dl>`;
 }
 function dailySection(summary,state,ctx,print=false) {
   const reports=list(summary.reports);

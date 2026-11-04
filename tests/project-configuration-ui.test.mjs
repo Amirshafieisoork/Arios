@@ -33,14 +33,10 @@ test('project configuration keeps all six responsibilities and permits the same 
 test('manager form requires actual active reviewers without inventing codes or choosing accounts',()=>{
   const html=projectConfigurationFields(state,ctx);
   assert(html.includes('name="projectCode"'));assert(html.includes('name="projectManagerId"'));assert(!html.includes(' selected'));
-  assert.equal((html.match(/<select /g)||[]).length,9,'customer, dossier and coded-service selects plus six reviewer selects');
-  assert(html.includes('name="dossierChoice"'));assert(html.includes('name="serviceCode"'));assert(html.includes('data-project-code-preview'));
-  assert(html.includes('۱۰۰۰۰ تا ۹۹۹۹۹'));
-  for(const id of ['archived','store'])assert(!html.includes(`value="${id}"`));
-  const customerSelect=html.slice(html.indexOf('<select name="customerId"'),html.indexOf('</select>',html.indexOf('<select name="customerId"')));
-  assert(customerSelect.includes('value="client"'));
+  assert.equal((html.match(/<select /g)||[]).length,6);
+  for(const id of ['archived','client','store'])assert(!html.includes(`value="${id}"`));
   const first=html.slice(html.indexOf('<select name="projectManagerId"'),html.indexOf('</select>',html.indexOf('<select name="projectManagerId"')));
-  assert(!first.includes('value="finance"'));assert(!first.includes('value="client"'));assert(html.includes('value="finance"'));
+  assert(!first.includes('value="finance"'));assert(html.includes('value="finance"'));
   assert.match(html,/انتخاب یک نفر برای دو مسئولیت مجاز/);
 });
 

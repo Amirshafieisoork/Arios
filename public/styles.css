@@ -62,14 +62,3 @@
 .workspace-icon img{display:block;object-fit:contain;filter:drop-shadow(0 0 1px #efdbb294) drop-shadow(0 0 4px #d7b16c40)}
 @media(forced-colors:active){.sidebar .brand-logo,.login-splash .brand-logo,.hero-art .hero-monogram img,.workspace-icon img{filter:none}}
 @media print{.brand-logo,.hero-monogram img,.workspace-icon img{filter:none!important}}
-
-/* Sidebar: grouped navigation with a quieter row for advanced manager tools. */
-.sidebar nav>.nav-link-tool{color:#aeb9c1;font-size:14px}
-.sidebar nav>.nav-link-tool .nav-icon{opacity:.78}
-.sidebar nav>.nav-link-tool.active{color:#fff}
-.sidebar nav>.nav-group+.nav-link{margin-top:0}
-
-/* Settings: advanced security/ownership/backup panels stay available but out of the way. */
-.advanced-settings>summary{font-weight:600;font-size:16px;color:var(--ink,#22363b)}
-.advanced-settings-body{display:grid;gap:16px;margin-top:18px}
-.advanced-settings-body>:first-child{margin-top:0}
