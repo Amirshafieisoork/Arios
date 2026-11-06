@@ -10,6 +10,12 @@ public final class SecurityPolicy {
     private static URI parse(String value) { try { return new URI(value); } catch (Exception e) { return null; } }
     private static boolean https(URI u) { return u != null && "https".equalsIgnoreCase(u.getScheme()) && u.getRawUserInfo() == null && (u.getPort() == -1 || u.getPort() == 443); }
     public static boolean canonical(String value) { URI u = parse(value); return https(u) && "arioshub.ir".equalsIgnoreCase(u.getHost()); }
+    public static boolean audioCapture(String origin, String page, String[] resources) {
+        URI u = parse(origin);
+        return canonical(origin) && canonical(page) && u.getRawQuery() == null && u.getRawFragment() == null
+            && (u.getPath() == null || u.getPath().length() == 0 || "/".equals(u.getPath()))
+            && resources != null && resources.length == 1 && "android.webkit.resource.AUDIO_CAPTURE".equals(resources[0]);
+    }
     public static boolean signedStorageFile(String value) {
         URI u = parse(value);
         if (!https(u) || !STORAGE_HOST.equalsIgnoreCase(u.getHost()) || u.getRawQuery() == null) return false;

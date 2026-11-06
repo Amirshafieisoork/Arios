@@ -73,3 +73,12 @@ and resource input; it does not include signing secrets.
 The installer is an APK for direct installation. It is separate from the PWA
 browser shortcut, and has not been published to an app store. Android may ask
 the user to allow installation from the browser for the first direct install.
+
+Release 1.0.1 adds microphone recording inside the app. Android asks for
+`RECORD_AUDIO` only when the person starts recording. The WebView grants only
+audio capture requested by the exact `https://arioshub.ir` origin while that
+site is foreground and unlocked; camera, mixed resources and foreign origins
+remain denied. Navigation, cancellation, backgrounding and account lock cancel
+pending permission requests. The system microphone prompt does not trigger the
+biometric lock; actually backgrounding the activity still locks it. Existing
+1.0.0 installations must install this signed update to use in-app recording.

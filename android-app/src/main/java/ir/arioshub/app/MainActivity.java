@@ -1,10 +1,12 @@
 package ir.arioshub.app;
 
 import android.app.Activity;
+import android.Manifest;
 import android.app.AlertDialog;
 import android.app.KeyguardManager;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.hardware.biometrics.BiometricManager;
@@ -63,7 +65,7 @@ import javax.net.ssl.HttpsURLConnection;
  */
 public final class MainActivity extends Activity {
     private static final int NAVY = Color.rgb(23, 41, 45), GOLD = Color.rgb(198, 163, 105), CREAM = Color.rgb(248, 245, 237);
-    private static final int PICK_FILE = 4001, SAVE_FILE = 4002, MAX_DOWNLOAD = 24 * 1024 * 1024;
+    private static final int PICK_FILE = 4001, SAVE_FILE = 4002, MICROPHONE_PERMISSION = 4003, MAX_DOWNLOAD = 24 * 1024 * 1024;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService network = Executors.newFixedThreadPool(2);
     private FrameLayout content;
@@ -88,6 +90,8 @@ public final class MainActivity extends Activity {
     private byte[] exportBytes;
     private String exportName, exportMime;
     private WebView printView;
+    private PermissionRequest microphoneRequest;
+    private boolean microphonePermissionPrompt;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -148,7 +152,7 @@ public final class MainActivity extends Activity {
                 if (!SecurityPolicy.resource(request.getUrl().toString())) return blockedResource(); return null;
             }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) { handler.cancel(); main.post(() -> notice("ارتباط امن تأیید نشد؛ اتصال اینترنت را بررسی کنید.")); }
-            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { progress.setVisibility(View.VISIBLE); }
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { cancelMicrophoneRequest(); progress.setVisibility(View.VISIBLE); }
             @Override public void onPageFinished(WebView view, String url) {
                 progress.setVisibility(View.GONE); CookieManager.getInstance().flush();
                 if (SecurityPolicy.canonical(url)) main.postDelayed(() -> checkSession(true), 1000);
@@ -168,7 +172,8 @@ public final class MainActivity extends Activity {
                 try { startActivityForResult(choose, PICK_FILE); } catch (ActivityNotFoundException e) { fileCallback.onReceiveValue(null); fileCallback = null; notice("انتخاب فایل در این گوشی در دسترس نیست."); }
                 return true;
             }
-            @Override public void onPermissionRequest(PermissionRequest request) { request.deny(); }
+            @Override public void onPermissionRequest(PermissionRequest request) { requestMicrophone(request); }
+            @Override public void onPermissionRequestCanceled(PermissionRequest request) { if (microphoneRequest == request) microphoneRequest = null; }
             @Override public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) { callback.invoke(origin, false, false); }
             @Override public boolean onCreateWindow(WebView view, boolean dialog, boolean userGesture, android.os.Message result) {
                 if (!userGesture || locked || !trustedPage()) return false;
@@ -193,6 +198,37 @@ public final class MainActivity extends Activity {
 
     private WebResourceResponse blockedResource() { return new WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", Collections.singletonMap("Cache-Control", "no-store"), new ByteArrayInputStream(new byte[0])); }
     private boolean trustedPage() { return web != null && SecurityPolicy.canonical(web.getUrl()); }
+    private boolean canGrantMicrophone(PermissionRequest request) {
+        return request != null && !destroyed && visible && !locked && trustedPage()
+            && SecurityPolicy.audioCapture(request.getOrigin().toString(), web.getUrl(), request.getResources());
+    }
+    private void cancelMicrophoneRequest() {
+        PermissionRequest pending = microphoneRequest; microphoneRequest = null;
+        if (pending != null) pending.deny();
+    }
+    private void requestMicrophone(PermissionRequest request) {
+        if (!canGrantMicrophone(request)) { request.deny(); return; }
+        if (microphonePermissionPrompt) { request.deny(); return; }
+        cancelMicrophoneRequest(); microphoneRequest = request;
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            microphoneRequest = null; request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE}); return;
+        }
+        microphonePermissionPrompt = true;
+        try { requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, MICROPHONE_PERMISSION); }
+        catch (RuntimeException error) { microphonePermissionPrompt = false; cancelMicrophoneRequest(); notice("مجوز میکروفون در دسترس نیست؛ از تنظیمات گوشی آن را فعال کنید."); }
+    }
+    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(code, permissions, results);
+        if (code != MICROPHONE_PERMISSION) return;
+        microphonePermissionPrompt = false;
+        PermissionRequest pending = microphoneRequest; microphoneRequest = null;
+        if (pending == null) return;
+        boolean granted = permissions.length == 1 && Manifest.permission.RECORD_AUDIO.equals(permissions[0])
+            && results.length == 1 && results[0] == PackageManager.PERMISSION_GRANTED
+            && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+        if (granted && canGrantMicrophone(pending)) pending.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+        else { pending.deny(); if (!destroyed && !granted) notice("برای ضبط ویس، اجازهٔ میکروفون را در تنظیمات برنامه فعال کنید؛ انتخاب فایل صوتی هم در دسترس است."); }
+    }
     private boolean handleNavigation(String url, boolean gesture) {
         if (SecurityPolicy.canonical(url)) return false;
         if (SecurityPolicy.signedStorageFile(url) && !locked && trustedPage()) { beginDownload(url, null, null); return true; }
@@ -206,6 +242,7 @@ public final class MainActivity extends Activity {
     private void loadHome() { if (!webLoaded) { webLoaded = true; web.loadUrl(SecurityPolicy.ORIGIN + "/portal/?native=android"); } }
     private void notice(String message) { if (destroyed) return; statusText.setText(message); statusText.setVisibility(View.VISIBLE); }
     private void showLock(String title, String message) {
+        cancelMicrophoneRequest();
         locked = true; web.setVisibility(View.INVISIBLE); privacy.setVisibility(View.VISIBLE); privacy.bringToFront(); lockTitle.setText(title); lockMessage.setText(message); unlockButton.setVisibility(vault.enabled() ? View.VISIBLE : View.GONE);
     }
     private void revealWeb() {
@@ -214,19 +251,26 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume(); visible = true;
+        if (web != null) web.onResume();
         if (vault.enabled() && locked && !promptActive) main.postDelayed(() -> { if (visible && locked && !promptActive) authenticate(false); }, 200);
         else if (!locked) { deliverPending(); main.postDelayed(() -> checkSession(false), 1000); }
     }
     @Override protected void onPause() {
-        if (vault.enabled()) showLock("آریوس قفل است", "برای ادامه اثر انگشت خود را تأیید کنید.");
+        if (!microphonePermissionPrompt) {
+            if (trustedPage()) web.evaluateJavascript("window.dispatchEvent(new Event('arios-native-background'))", null);
+            if (vault.enabled()) showLock("آریوس قفل است", "برای ادامه اثر انگشت خود را تأیید کنید.");
+        }
         super.onPause();
     }
     @Override protected void onStop() {
         visible = false; if (authentication != null) authentication.cancel(); promptActive = false;
+        cancelMicrophoneRequest(); if (web != null) web.onPause();
+        if (vault.enabled()) showLock("آریوس قفل است", "برای ادامه اثر انگشت خود را تأیید کنید.");
         CookieManager.getInstance().flush(); super.onStop();
     }
     @Override protected void onDestroy() {
         destroyed = true; if (authentication != null) authentication.cancel(); main.removeCallbacksAndMessages(null); network.shutdownNow();
+        cancelMicrophoneRequest();
         clearPendingFiles();
         if (web != null) { web.stopLoading(); web.destroy(); } if (printView != null) printView.destroy(); super.onDestroy();
     }
