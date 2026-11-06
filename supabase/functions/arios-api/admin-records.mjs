@@ -7,7 +7,7 @@ const clone = value => structuredClone(value);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const metadata = ['archivedAt','archivedBy','archiveReason','updatedAt','updatedBy'];
 const fields = {
-  projects: ['id','name','type','customerId','memberIds','contactIds','location','status','progress','budget','contractAmount','startDate','endDate','description','phases','cover','clientNote','publicVisible','publicTitle','publicSummary','projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','reviewChain'],
+  projects: ['id','name','type','customerId','memberIds','contactIds','location','status','progress','budget','contractAmount','startDate','endDate','description','phases','cover','clientNote','publicVisible','publicTitle','publicSummary','projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','reviewChain','codingVersion','dossierId','dossierNumber','serviceCode','projectNumber'],
   tasks: ['id','projectId','projectName','title','description','assigneeId','dueDate','status','version','createdAt','updatedAt','sourceTicketId'],
   reports: ['id','projectId','workerId','date','start','end','breakMinutes','description','output','status','minutes','createdAt','version','rate','laborCost','reviewNote','reviewedBy','location','photoIds','approval'],
   materials: ['id','projectId','inventoryId','name','quantity','originalQuantity','returnedQuantity','returns','unit','unitPrice','clientVisible','date','recordedBy','createdAt'],
@@ -18,7 +18,7 @@ const fields = {
   tickets: ['id','projectId','authorId','subject','description','priority','status','replies','createdAt','version','taskId','assigneeId','dueDate','approvalStatus','assignmentStatus'],
 };
 const editable = {
-  projects: fields.projects.filter(key => !['id','cover','contactIds'].includes(key)),
+  projects: fields.projects.filter(key => !['id','cover','contactIds','codingVersion','dossierId','dossierNumber','serviceCode','projectNumber'].includes(key)),
   tasks: ['title','description','assigneeId','dueDate','status'],
   reports: ['projectId','workerId','date','start','end','breakMinutes','description','output','location','photoIds'],
   materials: ['name','quantity','unit','unitPrice','clientVisible','date'],

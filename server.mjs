@@ -5,13 +5,15 @@ import { mkdirSync, existsSync, statSync, readFileSync, realpathSync, chmodSync 
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSeedState, publicState, applyAction, readDossierSubmission, DomainError } from './public/domain.mjs';
+import { applyPersonProfile, assertPersonnelCodeAvailable } from './public/people-profile.mjs';
+import { assertCustomerCodeAvailable } from './public/project-coding.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const COOKIE = 'arios_session';
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new DomainError(message, status, code); };
-const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'role', 'department', 'skill'].filter(k => user[k] !== undefined).map(k => [k, user[k]])) : null;
+const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'role', 'department', 'skill', 'personnelCode', 'customerCode'].filter(k => user[k] !== undefined).map(k => [k, user[k]])) : null;
 const localhost = host => ['localhost', '127.0.0.1', '::1', '[::1]', '::ffff:127.0.0.1'].includes(host);
 const textValue = (value, name, max = 200, min = 1) => { if (typeof value !== 'string' || value.trim().length < min || value.length > max) fail(`${name} معتبر نیست.`); return value.trim(); };
 const passwordHash = (password, salt) => scryptSync(password, salt, 64).toString('hex');
@@ -119,7 +121,11 @@ export function createAriosServer(options = {}) {
     const projects = ids.map(id => state.projects.find(project => project.id === id));
     if (projects.some(project => !project)) fail('پروژه یافت نشد.', 404, 'NOT_FOUND');
     if (payload.role === 'customer' && projects.some(project => project.customerId)) fail('پروژه از قبل مشتری دارد.', 409, 'PROJECT_OWNED');
+    if (payload.role === 'customer' && projects.some(project => project.codingVersion === 1)) fail('مشتری پروژهٔ کدگذاری‌شده از روی پروندهٔ اصلی مشخص است.', 409, 'PROJECT_CUSTOMER_PROTECTED');
     const user = { id: `u_${randomUUID()}`, name, email, role: payload.role };
+    applyPersonProfile(user,payload);
+    assertPersonnelCodeAvailable(state,user.id,user.personnelCode);
+    if(user.customerCode)assertCustomerCodeAvailable(state,user.id,user.customerCode);
     state.users.push(user);
     for (const project of projects) {
       if (user.role === 'customer') project.customerId = user.id;

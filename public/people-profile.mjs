@@ -1,16 +1,35 @@
 /** Optional work details saved in the same transaction as a person's account. */
 import {latinDigits} from './identity.mjs';
+import {normalizePartyCode} from './project-coding.mjs';
 const plain=value=>value&&typeof value==='object'&&!Array.isArray(value);
 function fail(message,code='INVALID_PERSON_DETAILS'){const error=new Error(message);error.status=400;error.code=code;throw error;}
 function date(value){if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||!Number.isFinite(Date.parse(`${value}T00:00:00Z`))||new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)!==value)fail('تاریخ اجرای نرخ معتبر نیست.');return value;}
 function time(value){if(typeof value!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(value))fail('ساعت کاری معتبر نیست.');return value;}
+export function assertPersonnelCodeAvailable(state,personId,value){
+  if(!value)return '';
+  const code=normalizePartyCode(value,'personnel');
+  if((state?.users||[]).some(person=>{
+    if(person.id===personId||!person.personnelCode)return false;
+    try{return normalizePartyCode(person.personnelCode,'personnel')===code;}catch{return false;}
+  })){
+    const error=new Error('این کد پرسنلی قبلاً به فرد دیگری اختصاص یافته است؛ برای حساب حذف‌شده، همان حساب را بازیابی کنید.');
+    error.status=409;error.code='DUPLICATE_PERSONNEL_CODE';throw error;
+  }
+  return code;
+}
 export function applyPersonProfile(person,payload={}){
   const next={};
-  if(payload.personnelCode!==undefined){
-    if(typeof payload.personnelCode!=='string')fail('کد پرسنلی معتبر نیست.');
-    const code=latinDigits(payload.personnelCode.normalize('NFKC')).trim();
-    if(code.length>40||code&&!/^[\p{L}\p{N}_-]+$/u.test(code))fail('کد پرسنلی باید تا ۴۰ نویسه و شامل حرف، عدد، خط تیره یا زیرخط باشد.');
-    next.personnelCode=code;
+  for(const [key,kind,customerOnly]of [['personnelCode','personnel',false],['customerCode','customer',true]]){
+    if(payload[key]===undefined)continue;
+    if(typeof payload[key]!=='string')fail(customerOnly?'کد مشتری معتبر نیست.':'کد پرسنلی معتبر نیست.');
+    let code=latinDigits(payload[key].normalize('NFKC')).trim();const previous=latinDigits(String(person[key]??'').normalize('NFKC')).trim();
+    // Existing identifiers are never rewritten by an unrelated profile edit.
+    // A replacement follows the current numeric scheme and the person's group.
+    if(code&&code!==previous){
+      if(customerOnly&&person.role!=='customer'||!customerOnly&&person.role==='customer')fail(customerOnly?'کد پنج‌رقمی مشتری فقط برای مشتری ثبت می‌شود.':'کد شش‌رقمی پرسنلی فقط برای اعضای آریوس ثبت می‌شود.');
+      try{code=normalizePartyCode(code,kind);}catch(error){fail(error.message);}
+    }
+    next[key]=code;
   }
   if(payload.personDetails===undefined){Object.assign(person,next);return person;}
   const details=payload.personDetails;

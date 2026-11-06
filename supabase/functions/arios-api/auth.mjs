@@ -1,6 +1,7 @@
 import {hasPermission,effectivePermissions,requirePermission,applyPermissionOverrides,canAdministerPerson,redactActionResult} from './permissions.mjs';
 import { applyAction } from './domain.mjs';
-import { applyPersonProfile } from './people-profile.mjs';
+import { applyPersonProfile,assertPersonnelCodeAvailable } from './people-profile.mjs';
+import {assertCustomerCodeAvailable} from './project-coding.mjs';
 import { normalizePhone, normalizeUsername, loginIdentity, phoneAuthEmail, internalAuthEmail, latinDigits } from './identity.mjs';
 import { applyPrimaryManagerTransfer, primaryTransferCompleted, managementRoleDetails } from './management-roles.mjs';
 /** Authentication is resolved from Supabase Auth and private profiles only. */
@@ -10,7 +11,7 @@ export class APIError extends Error {
   }
 }
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
-export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'deletedAt', 'managementRole', 'managementTitle', 'passwordChangeRequired','permissions','permissionOverrides'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
+export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'customerCode', 'deletedAt', 'managementRole', 'managementTitle', 'passwordChangeRequired','permissions','permissionOverrides'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
 export function text(value, label, max = 4000) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) fail(`${label} معتبر نیست.`);
   return value.trim();
@@ -158,6 +159,8 @@ function accountInState(state, actorId, payload, domainUserId) {
   if(payload.personDetails?.hourlyRate!==undefined)requirePermission(actor,'projects.prices',state);
   if(!canAdministerPerson(state,actor,user))fail('نقش حساب از دسترسی فعلی شما بیشتر است.',403,'FORBIDDEN');
   applyPersonProfile(user,payload);
+  if(user.customerCode)assertCustomerCodeAvailable(state,user.id,user.customerCode);
+  if(user.personnelCode)assertPersonnelCodeAvailable(state,user.id,user.personnelCode);
   if(payload.permissions!==undefined)applyPermissionOverrides(state,actor,user,payload.permissions);
   state.users.push(user);
   for (const project of projects) {

@@ -84,7 +84,7 @@ const safeEvidenceReport = (report, financial) => ({...pick(report, ['id', 'proj
 function safeDossierSummary(summary, financial) {
   const result = pick(summary, ['from', 'to', 'totalMinutes', 'approvedMinutes', 'materialItemCount', 'completionDate', 'completionNotes']);
   result.financial = Boolean(financial);
-  result.project = pick(summary?.project, ['id', 'name', 'projectCode', 'customerCode', 'dossierCode', 'dossierTitle', 'projectManagerId', 'customerId', 'memberIds', 'startDate', 'endDate', 'description', 'clientNote']);
+  result.project = pick(summary?.project, ['id', 'name', 'projectCode', 'customerCode', 'dossierCode', 'dossierTitle', 'codingVersion', 'dossierId', 'dossierNumber', 'serviceCode', 'projectNumber', 'type', 'projectManagerId', 'customerId', 'memberIds', 'startDate', 'endDate', 'description', 'clientNote']);
   result.project.reviewChain = list(summary?.project?.reviewChain).map(stage => pick(stage, ['label', 'userId']));
   result.customer = summary?.customer ? pick(summary.customer, ['id', 'name', ...(financial ? ['phone'] : [])]) : null;
   result.lead = summary?.lead ? pick(summary.lead, ['id', 'name', 'employeeCode']) : null;
@@ -151,7 +151,7 @@ export function buildDossierSummary(state, projectId, {from = '', to = ''} = {})
   const relevantIds = new Set([...list(project.memberIds), project.projectManagerId, project.customerId, ...list(project.reviewChain).map(stage => stage.userId), ...reports.map(report => report.workerId), ...list(project.dossier?.staffAllocations).map(row => row.userId)]);
   const people = list(state.users).filter(person => relevantIds.has(person.id)), customer = people.find(person => person.id === project.customerId), lead = people.find(person => person.id === project.projectManagerId);
   const result = {
-    project: Object.fromEntries(['id','name','projectCode','customerCode','dossierCode','dossierTitle','projectManagerId','customerId','memberIds','startDate','endDate','description','clientNote','reviewChain'].filter(key => project[key] !== undefined).map(key => [key, clone(project[key])])), from, to, financial, reports, days, materials,
+    project: Object.fromEntries(['id','name','projectCode','customerCode','dossierCode','dossierTitle','codingVersion','dossierId','dossierNumber','serviceCode','projectNumber','type','projectManagerId','customerId','memberIds','startDate','endDate','description','clientNote','reviewChain'].filter(key => project[key] !== undefined).map(key => [key, clone(project[key])])), from, to, financial, reports, days, materials,
     customer: customer ? {id: customer.id, name: customer.name, ...(financial && customer.phone ? {phone: customer.phone} : {})} : null,
     lead: lead ? {id: lead.id, name: lead.name, employeeCode: lead.employeeCode || lead.personnelCode || null} : null,
     totalMinutes: days.reduce((sum, day) => sum + day.minutes, 0), approvedMinutes: days.reduce((sum, day) => sum + day.approvedMinutes, 0),

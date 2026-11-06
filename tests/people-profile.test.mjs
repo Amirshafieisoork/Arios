@@ -83,18 +83,21 @@ test('shared people validation uses identical source for browser and edge',async
   assert.equal(await readFile(new URL('../public/people-profile.mjs',import.meta.url),'utf8'),await readFile(new URL('../supabase/functions/arios-api/people-profile.mjs',import.meta.url),'utf8'));
 });
 
-test('personnel codes preserve leading zeros and normalize digits for every role without changing access',()=>{
-  for(const role of ['manager','worker','warehouse','accountant','customer']){
-    const person={id:'person',role,name:'همکار'};
-    applyPersonProfile(person,{personnelCode:' ۰۰۱۰۰۶ '});
-    assert.equal(person.personnelCode,'001006');assert.equal(person.role,role);
+test('personnel codes use six digits for staff and preserve existing legacy values during unrelated edits',()=>{
+  for(const role of ['manager','worker','warehouse','accountant']){
+    const person={id:'person',role,name:'همکار',username:'login-before'};
+    applyPersonProfile(person,{personnelCode:' ۱۰۰۰۰۶ '});
+    assert.equal(person.personnelCode,'100006');assert.equal(person.role,role);assert.equal(person.username,'login-before');
     applyPersonProfile(person,{personnelCode:'',personDetails:{}});
     assert.equal(person.personnelCode,'');assert.equal(person.role,role);
   }
+  const person={id:'legacy',role:'worker',personnelCode:'001006'};
+  applyPersonProfile(person,{personnelCode:'۰۰۱۰۰۶'});assert.equal(person.personnelCode,'001006');
+  applyPersonProfile(person,{personnelCode:'100006'});assert.equal(person.personnelCode,'100006');
 });
 
 test('malformed personnel codes and invalid combined details never partially change a person',()=>{
-  for(const personnelCode of [100006,null,'<script>','ABC 123','A'.repeat(41)]){
+  for(const personnelCode of [100006,null,'<script>','ABC 123','A'.repeat(41),'001006','99999','1000000']){
     const person={id:'person',role:'worker',personnelCode:'old'},before=structuredClone(person);
     assert.throws(()=>applyPersonProfile(person,{personnelCode}),error=>error.code==='INVALID_PERSON_DETAILS');
     assert.deepEqual(person,before);
@@ -116,4 +119,55 @@ test('manager can edit and view a personnel code in the unified person form and 
   assert.equal(personProfilePayload(data).personnelCode,'100006');
   assert.equal(personProfilePayload(data).personDetails,undefined);
   assert.throws(()=>applyAction(state,'worker','account.update',{id:'worker',personnelCode:'manager'}),error=>error.status===403);
+});
+
+
+test('customer codes normalize digits and enforce five-digit bounds without changing credentials',()=>{
+  for(const [raw,expected]of [[' ۱۰۱۵۱ ','10151'],['١٠٠٠٠','10000'],['99999','99999']]){
+    const person={id:'customer-test',role:'customer',username:'unchanged',phone:'+989123456789'};
+    applyPersonProfile(person,{customerCode:raw});
+    assert.equal(person.customerCode,expected);assert.equal(person.username,'unchanged');assert.equal(person.phone,'+989123456789');
+  }
+  for(const customerCode of ['9999','100000','01000','10-151','ABC',10151,null]){
+    const person={id:'c',role:'customer',customerCode:'10151'},before=structuredClone(person);
+    assert.throws(()=>applyPersonProfile(person,{customerCode}),error=>error.code==='INVALID_PERSON_DETAILS');assert.deepEqual(person,before);
+  }
+  const person={id:'c',role:'customer'},before=structuredClone(person);
+  assert.throws(()=>applyPersonProfile(person,{customerCode:'10151',personDetails:{hourlyRate:100}}));assert.deepEqual(person,before);
+});
+
+test('party code fields follow the person group and malicious cross-group assignments are rejected',()=>{
+  assert.throws(()=>applyPersonProfile({role:'customer'},{personnelCode:'100001'}),error=>error.code==='INVALID_PERSON_DETAILS');
+  assert.throws(()=>applyPersonProfile({role:'worker'},{customerCode:'10151'}),error=>error.code==='INVALID_PERSON_DETAILS');
+  const customer=new FormData();customer.set('role','customer');customer.set('customerCode','10151');customer.set('personnelCode','100001');
+  assert.equal(personProfilePayload(customer).customerCode,'10151');assert.equal(personProfilePayload(customer).personnelCode,undefined);
+  const staff=new FormData();staff.set('role','manager');staff.set('customerCode','10151');staff.set('personnelCode','100001');
+  assert.equal(personProfilePayload(staff).personnelCode,'100001');assert.equal(personProfilePayload(staff).customerCode,undefined);
+  const state=publicState(createSeedState(),'manager'),person={id:'customer-test',name:'مشتری نمونه',role:'customer',customerCode:'10151'};state.users.push(person);
+  const html=renderPersonDetailsFields(state,ctx,person);
+  assert.match(html,/data-person-customer-code-fields ><legend/);assert.match(html,/data-person-personnel-code-fields hidden disabled/);assert.match(html,/name="customerCode"[^>]+value="10151"/);
+  assert.match(renderPeopleWorkspace(state,ctx,{supabaseAuth:true}),/کد مشتری<\/dt><dd><bdi dir="ltr">10151/);
+});
+
+test('new native accounts reject duplicate customer codes before external identity creation',async()=>{
+  const state=createSeedState();state.users.find(person=>person.id==='customer').customerCode='10151';let creates=0;
+  const repo={rateLimit:async()=>({allowed:true}),loadState:async()=>({state:structuredClone(state),revision:1})};
+  const client={auth:{admin:{createUser:async()=>{creates++;return {data:{user:{id:'must-not-create'}}};}}}};
+  await assert.rejects(createAccount(client,repo,state.users.find(person=>person.id==='manager'),{name:'مشتری تازه',role:'customer',phone:'09351234567',password:'123456',customerCode:'۱۰۱۵۱'}),error=>error.status===409);
+  assert.equal(creates,0);
+});
+
+test('new native accounts reject personnel codes reserved by archived staff before creating Auth',async()=>{
+  const state=createSeedState();Object.assign(state.users.find(person=>person.id==='worker'),{personnelCode:'100006',deletedAt:new Date().toISOString()});let creates=0;
+  const repo={rateLimit:async()=>({allowed:true}),loadState:async()=>({state:structuredClone(state),revision:1})};
+  const client={auth:{admin:{createUser:async()=>{creates++;return {data:{user:{id:'must-not-create'}}};}}}};
+  await assert.rejects(createAccount(client,repo,state.users.find(person=>person.id==='manager'),{name:'همکار تازه',role:'worker',phone:'09351234567',password:'123456',personnelCode:'۱۰۰۰۰۶'}),error=>error.status===409&&error.code==='DUPLICATE_PERSONNEL_CODE');
+  assert.equal(creates,0);
+});
+
+test('changing personnel codes cannot reuse an archived account code and leaves profile untouched',()=>{
+  const state=createSeedState();Object.assign(state.users.find(person=>person.id==='worker'),{personnelCode:'100006',deletedAt:new Date().toISOString()});
+  const before=structuredClone(state);
+  assert.throws(()=>applyAction(state,'manager','account.update',{id:'manager',name:'نباید ذخیره شود',personnelCode:'۱۰۰۰۰۶'}),error=>error.status===409&&error.code==='DUPLICATE_PERSONNEL_CODE');
+  assert.deepEqual(state,before);
 });

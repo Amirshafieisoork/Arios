@@ -30,11 +30,12 @@ test('project configuration keeps all six responsibilities and permits the same 
   const noCode=configuration();noCode.set('projectCode',' ');assert.throws(()=>projectConfigurationPayload(noCode),/کد پروژه/);
 });
 
-test('manager form requires actual active reviewers without inventing codes or choosing accounts',()=>{
+test('manager form requires actual active reviewers and builds project codes from the hierarchy',()=>{
   const html=projectConfigurationFields(state,ctx);
-  assert(html.includes('name="projectCode"'));assert(html.includes('name="projectManagerId"'));assert(!html.includes(' selected'));
-  assert.equal((html.match(/<select /g)||[]).length,6);
-  for(const id of ['archived','client','store'])assert(!html.includes(`value="${id}"`));
+  assert(!html.includes('name="projectCode"'));assert(html.includes('name="serviceCode"'));assert(html.includes('name="projectManagerId"'));assert(!html.includes(' selected'));
+  assert.equal((html.match(/<select name="(?:projectManagerId|reviewer[1-5])"/g)||[]).length,6);
+  const reviewSettings=html.slice(html.indexOf('<ol class="project-review-settings">'));
+  for(const id of ['archived','client','store'])assert(!reviewSettings.includes(`value="${id}"`));
   const first=html.slice(html.indexOf('<select name="projectManagerId"'),html.indexOf('</select>',html.indexOf('<select name="projectManagerId"')));
   assert(!first.includes('value="finance"'));assert(html.includes('value="finance"'));
   assert.match(html,/انتخاب یک نفر برای دو مسئولیت مجاز/);

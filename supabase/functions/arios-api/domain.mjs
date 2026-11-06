@@ -8,8 +8,9 @@ import { applyAdminRecordAction, managementSnapshot } from './admin-records.mjs'
 import { applyCatalogAction, readCatalogs } from './catalogs.mjs';
 import { applyPersonalStockAction, personalStockSnapshot } from './personal-stock.mjs';
 import { applyFinanceAction, employeeFinanceSnapshot } from './finance-ledger.mjs';
-import { applyPersonProfile } from './people-profile.mjs';
+import { applyPersonProfile, assertPersonnelCodeAvailable } from './people-profile.mjs';
 import { applyPrimaryManagerTransfer, managementRoleDetails, managementRoleSnapshot } from './management-roles.mjs';
+import {normalizeCodingText,parseProjectCode,allocateProjectCoding,assertProjectCodingUpdate,applyCustomerDossierAction,customerDossiersSnapshot,assertCustomerCodeAvailable,readCustomerDossiers} from './project-coding.mjs';
 /** ARIOS domain. All amounts are whole toman; elapsed work is integer minutes. */
 export class DomainError extends Error {
   constructor(message, status = 400, code = 'INVALID_INPUT') {
@@ -95,7 +96,7 @@ export function projectReadAccess(state, userOrId, projectId) {
 }
 export const PROJECT_APPROVAL_LABELS = Object.freeze(['مسئول پروژه', 'مسئول واحد', 'مدیر گروه فنی', 'واحد فروش', 'واحد مالی', 'مدیرعامل']);
 export function normalizeProjectCode(value) {
-  return typeof value === 'string' ? value.normalize('NFKC').replace(/[۰-۹]/g,char=>String(char.charCodeAt(0)-1776)).replace(/[٠-٩]/g,char=>String(char.charCodeAt(0)-1632)).replace(/[\u200c\u200e\u200f]/g,'').trim().toUpperCase() : '';
+  return typeof value === 'string' ? normalizeCodingText(value).toUpperCase() : '';
 }
 function projectMetadata(state, payload, previous = {}) {
   const fields = ['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','reviewChain'];
@@ -152,7 +153,7 @@ function audit(state, actor, action, entity, description) {
   state.audit.push({ id: id('a'), actorId: actor.id, action, entityId: entity.id, createdAt: now(), description });
 }
 function safeUser(user, includeRates = false) {
-  const result = pick(user, ['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'deletedAt']);
+  const result = pick(user, ['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'customerCode', 'deletedAt']);
   if (internalAuthEmail(result.email)) delete result.email;
   if (includeRates) Object.assign(result, pick(user, ['hourlyRate', 'rateHistory']));
   return result;
@@ -234,7 +235,7 @@ export function publicState(state, userId) {
     user: {...safeUser(user, finance),...managementRoleDetails(state,user),permissions:effectivePermissions(user,state),permissionOverrides:copy(user.permissions||{})},
     users: state.users.filter(person => finance || projectDirectory || (isWarehouse && ['manager','worker','warehouse','accountant'].includes(person.role)) || contactIds.has(person.id) || referenceIds.has(person.id)).map(person => {
       if (person.id===user.id||hasPermission(user,'people.manage',state))return{...safeUser(person,finance),...managementRoleDetails(state,person),permissions:effectivePermissions(person,state),permissionOverrides:copy(person.permissions||{}),...pick(person,['availability','workStart','workEnd'])};
-      if(projectDirectory)return pick(person,['id','name','role','deletedAt','personnelCode']);
+      if(projectDirectory)return pick(person,['id','name','role','deletedAt','personnelCode','customerCode']);
       if (isWarehouse) return pick(person, ['id', 'name', 'role', 'deletedAt']);
       if (isAccountant) return pick(person, ['id', 'name', 'role', 'hourlyRate', 'rateHistory', 'deletedAt']);
       return contactIds.has(person.id) ? safeUser(person) : pick(person,['id','name','role','deletedAt','employeeCode','personnelCode']);
@@ -242,7 +243,7 @@ export function publicState(state, userId) {
     projects: projects.map(project => {
       if (isWarehouse&&!projectAccess(state,user,project.id))return pick(project,['id','name','type','status','projectCode']);
       const item = pick(project, isAccountant ? ['id', 'name', 'type', 'customerId', 'memberIds', 'status', 'progress', 'startDate', 'endDate', 'cover'] : ['id', 'name', 'type', 'customerId', 'memberIds', 'contactIds', 'location', 'status', 'progress', 'startDate', 'endDate', 'description', 'phases', 'cover', 'clientNote']);
-      Object.assign(item,pick(project,['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle']));
+      Object.assign(item,pick(project,['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','codingVersion','dossierId','dossierNumber','serviceCode','projectNumber']));
       item.canRecordWork = hasPermission(user,'reports.submit',state) && canExecute(project.id);
       if (finance || isWorker) {
         item.dossierVersion = project.dossier?.version || 0;
@@ -278,6 +279,7 @@ export function publicState(state, userId) {
     audit: isManager ? state.audit.map(entry => pick(entry, ['id', 'actorId', 'action', 'entityId', 'createdAt', 'description'])) : [],
     reportDrafts: (isManager || isWorker) ? (state.reportDrafts || []).filter(entry => entry.authorId === user.id && !entry.reportId && projectIds.has(entry.projectId)).map(entry => pick(entry, ['id', 'projectId', 'workerId', 'date', 'start', 'end', 'breakMinutes', 'description', 'output', 'location', 'photoIds', 'version', 'updatedAt'])) : [],
     catalogs: readCatalogs(state,{includeArchived:isManager}),
+    customerDossiers:customerDossiersSnapshot(state,user,[...projectIds]),
   };
   if(user.role!=='customer'){const records=managementSnapshot(state,user,{canReadProject:projectId=>projectReadAccess(state,user,projectId)});if(isManager||Object.values(records).some(rows=>Array.isArray(rows)&&rows.length))result.management=records;}
   if(isManager)result.managementRoles=managementRoleSnapshot(state,user);
@@ -356,8 +358,15 @@ export function applyAction(state, userId, action, payload = {}) {
   } else if(action.startsWith('catalog.')) {
     result=applyCatalogAction(draft,user,action,payload);
     audit(draft,user,action,result,'فهرست دسته‌بندی‌های سازمان به‌روزرسانی شد.');
+  } else if(action.startsWith('customer-dossier.')) {
+    result=applyCustomerDossierAction(draft,user,action,payload);
+    audit(draft,user,action,result,'پروندهٔ مشتری به‌روزرسانی شد.');
   } else if (action === 'project.create') {
     requirePermission(user,'projects.create',draft);
+    let coding;
+    if(payload.codingVersion!==undefined&&payload.codingVersion!==1)fail('نسخهٔ کدگذاری پروژه معتبر نیست.');
+    if(payload.codingVersion===1){coding=allocateProjectCoding(draft,user,payload);payload={...payload,...coding};}
+    else if(parseProjectCode(payload.projectCode)||/^\d{5}-\d{2}-\d{3}-\d{3}$/.test(normalizeCodingText(payload.projectCode)))fail('کد رسمی پروژه را از انتخاب مشتری، پرونده و خدمات بسازید.',400,'STRUCTURED_CODING_REQUIRED');
     if(!hasPermission(user,'projects.prices',draft)){if(payload.budget!==undefined||payload.contractAmount!==undefined)fail('دسترسی ثبت مبلغ پروژه فعال نیست.',403,'FORBIDDEN');payload={...payload,budget:0,contractAmount:0};}
     const name = text(payload.name, 'نام پروژه', { max: 160 });
     const type = text(payload.type, 'نوع پروژه', { max: 80 });
@@ -371,13 +380,20 @@ export function applyAction(state, userId, action, payload = {}) {
     if (endDate < startDate) fail('پایان پروژه نباید پیش از شروع باشد.');
     const cover = /event|مراسم|همایش/i.test(type) ? 'event' : /electric|برق/i.test(type) ? 'electric' : /media|رسانه/i.test(type) ? 'media' : 'building';
     result = { id: id('p'), name, type, customerId, memberIds, location: text(payload.location, 'موقعیت', { max: 240 }), status: 'active', progress: 0, budget: integer(payload.budget, 'بودجه'), contractAmount: integer(payload.contractAmount, 'مبلغ قرارداد'), startDate, endDate, description: text(payload.description, 'شرح پروژه', { optional: true }), phases: ['برنامه‌ریزی', 'اجرا', 'آزمایش و تحویل'].map(name => ({ id: id('ph'), name, progress: 0 })), cover, clientNote: '', publicVisible: bool(payload.publicVisible), publicTitle: text(payload.publicTitle, 'عنوان عمومی', { optional: true, max: 160 }), publicSummary: text(payload.publicSummary, 'شرح عمومی', { optional: true, max: 1000 }) };
-    Object.assign(result,projectMetadata(draft,payload),{createdBy:user.id});
+    Object.assign(result,projectMetadata(draft,payload),coding||{},{createdBy:user.id});
     draft.projects.push(result); audit(draft, user, action, result, 'پروژه ایجاد شد.');
   } else if (action === 'project.update') {
     requirePermission(user,'projects.edit',draft);
     if(!projectReadAccess(draft,user,payload.id))fail('به این پروژه دسترسی ندارید.',403,'FORBIDDEN');
     if(['budget','contractAmount'].some(key=>payload[key]!==undefined))requirePermission(user,'projects.prices',draft);
     const project = find(draft.projects, payload.id, 'پروژه');
+    if(project.codingVersion!==1&&payload.codingVersion!==1&&payload.projectCode!==undefined&&normalizeProjectCode(payload.projectCode)!==normalizeProjectCode(project.projectCode)&&/^\d{5}-\d{2}-\d{3}-\d{3}$/.test(normalizeCodingText(payload.projectCode)))fail('کد رسمی پروژه را از انتخاب مشتری، پرونده و خدمات بسازید.',400,'STRUCTURED_CODING_REQUIRED');
+    assertProjectCodingUpdate(draft,payload,project);
+    if(project.codingVersion!==1&&payload.codingVersion!==undefined){
+      if(payload.codingVersion!==1)fail('نسخهٔ کدگذاری پروژه معتبر نیست.');
+      const coding=allocateProjectCoding(draft,user,{...payload,customerId:payload.customerId??project.customerId},project);
+      Object.assign(project,coding);payload={...payload,...coding};
+    }
     for(const [key,label,max] of [['name','نام پروژه',160],['type','نوع پروژه',80],['location','موقعیت',240]])if(payload[key]!==undefined)project[key]=text(payload[key],label,{max});
     if(payload.description!==undefined)project.description=text(payload.description,'شرح پروژه',{optional:true});
     if(payload.budget!==undefined)project.budget=integer(payload.budget,'بودجه');
@@ -473,6 +489,7 @@ export function applyAction(state, userId, action, payload = {}) {
   } else if (action === 'account.update') {
     manager(user);
     const person = find(draft.users, text(payload.id, 'شناسه حساب', { max: 120 }), 'حساب');
+    const previousPartyCodes={customerCode:person.customerCode,personnelCode:person.personnelCode};
     if(!canAdministerPerson(draft,user,person))fail('ویرایش این حساب به دسترسی کامل‌تری نیاز دارد.',403,'FORBIDDEN');
     const ownership=managementRoleSnapshot(draft,user);
     if(person.id===ownership?.primaryManagerId && person.id!==user.id && !ownership.canTransferPrimary) fail('ویرایش حساب مدیر اصلی فقط برای خود مدیر اصلی مجاز است.',403,'PRIMARY_MANAGER_REQUIRED');
@@ -495,6 +512,12 @@ export function applyAction(state, userId, action, payload = {}) {
     if (payload.department !== undefined) person.department = text(payload.department, 'واحد', { optional: true, max: 100 });
     if (payload.skill !== undefined) person.skill = text(payload.skill, 'مهارت', { optional: true, max: 200 });
     const requestedRole = payload.role === undefined ? person.role : payload.role;
+    const codedCustomerProjects=draft.projects.filter(project=>project.customerId===person.id&&(project.codingVersion===1||parseProjectCode(project.projectCode)));
+    const codedCustomerDossiers=readCustomerDossiers(draft,{includeArchived:true}).filter(row=>row.customerId===person.id);
+    if((codedCustomerProjects.length||codedCustomerDossiers.length)&&requestedRole!=='customer')fail('این مشتری پرونده یا پروژهٔ کدگذاری‌شده دارد؛ نقش آن قابل تبدیل به پرسنل نیست.',409,'CUSTOMER_CODING_IN_USE');
+    const reservedCustomerCodes=new Set([...codedCustomerProjects.map(project=>project.customerCode||parseProjectCode(project.projectCode)?.customerCode),...codedCustomerDossiers.map(row=>row.customerCode)].filter(Boolean).map(normalizeCodingText));
+    const bootstrapsReservedCode=!person.customerCode&&reservedCustomerCodes.size===1&&reservedCustomerCodes.has(normalizeCodingText(payload.customerCode));
+    if((codedCustomerProjects.length||codedCustomerDossiers.length)&&payload.customerCode!==undefined&&normalizeCodingText(payload.customerCode)!==normalizeCodingText(person.customerCode)&&!bootstrapsReservedCode)fail('کد مشتری پس از ایجاد پرونده ثابت است.',409,'CUSTOMER_CODE_IN_USE');
     if (person.role === 'manager' && requestedRole !== 'manager') fail('نقش مدیر اصلی از این فرم تغییر نمی‌کند.', 403, 'MANAGER_ROLE_PROTECTED');
     if (person.role !== 'manager' && !['worker', 'customer', 'warehouse', 'accountant'].includes(requestedRole)) fail('نقش حساب معتبر نیست.');
     if (requestedRole === 'warehouse' && !person.username) fail('برای انباردار نام کاربری مجزا ثبت کنید.', 400, 'USERNAME_REQUIRED');
@@ -504,6 +527,7 @@ export function applyAction(state, userId, action, payload = {}) {
     if (!Array.isArray(projectIds) || projectIds.length > 100 || projectIds.some(value => typeof value !== 'string') || new Set(projectIds).size !== projectIds.length) fail('فهرست پروژه‌ها معتبر نیست.');
     const selectedProjects = projectIds.map(value => find(draft.projects, value, 'پروژه'));
     const selectedProjectIds=new Set(projectIds);
+    if(payload.replaceProjectIds===true&&codedCustomerProjects.some(project=>!project.archivedAt&&!selectedProjectIds.has(project.id)))fail('انتساب مشتری پروژهٔ کدگذاری‌شده قابل حذف نیست؛ پروژه را بایگانی کنید.',409,'PROJECT_CODING_IMMUTABLE');
     if(selectedProjects.some(project=>project.archivedAt))fail('انتساب تازه به پروژهٔ حذف‌شده مجاز نیست؛ ابتدا پروژه را بازیابی کنید.',409,'PROJECT_ARCHIVED');
     const warnings = [];
     if (requestedRole === 'worker') {
@@ -518,7 +542,7 @@ export function applyAction(state, userId, action, payload = {}) {
       const candidates = new Set(selectedProjects.map(project => project.id));
       for (const project of draft.projects) {
         if (!replaceProjects&&(project.memberIds || []).includes(person.id)) candidates.add(project.id);
-        if(replaceProjects&&project.customerId===person.id&&!selectedProjectIds.has(project.id))project.customerId=null;
+        if(replaceProjects&&project.customerId===person.id&&!selectedProjectIds.has(project.id)&&project.codingVersion!==1&&!parseProjectCode(project.projectCode))project.customerId=null;
         project.memberIds = (project.memberIds || []).filter(value => value !== person.id);
       }
       for (const project of draft.projects.filter(project => candidates.has(project.id))) {
@@ -535,6 +559,8 @@ export function applyAction(state, userId, action, payload = {}) {
     if(payload.personDetails?.hourlyRate!==undefined)requirePermission(user,'projects.prices',draft);
     person.role = requestedRole;
     applyPersonProfile(person,payload);
+    if(person.customerCode&&(normalizeCodingText(person.customerCode)!==normalizeCodingText(previousPartyCodes.customerCode)||/^[1-9]\d{4}$/.test(normalizeCodingText(person.customerCode))))assertCustomerCodeAvailable(draft,person.id,person.customerCode);
+    if(person.personnelCode&&(normalizeCodingText(person.personnelCode)!==normalizeCodingText(previousPartyCodes.personnelCode)||/^[1-9]\d{5}$/.test(normalizeCodingText(person.personnelCode))))assertPersonnelCodeAvailable(draft,person.id,person.personnelCode);
     if(payload.permissions!==undefined)applyPermissionOverrides(draft,user,person,payload.permissions);
     result = { ...safeUser(person, true), warnings };
     audit(draft, user, action, person, 'اطلاعات تماس و نقش حساب به‌روزرسانی شد.');

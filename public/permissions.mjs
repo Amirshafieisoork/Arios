@@ -65,6 +65,7 @@ export function actionPermission(action,payload={}){
  if(action.startsWith('admin.record.')){const type=collectionKeys[payload.collection];return type==='projects'?'projects.'+(action.endsWith('.update')?'edit':'archive'):type==='inventory'?'inventory.'+(action.endsWith('.update')?'edit':'archive'):type==='reports'?'reports.manage':type==='tasks'?'tasks.manage':type==='support'?'support.manage':type==='finance'?'finance.manage':type==='messages'?'messages.manage':null;}
  if(action==='project.create')return 'projects.create';
  if(action==='project.update')return 'projects.edit';
+ if(action.startsWith('customer-dossier.'))return action.endsWith('.create')?'projects.create':action.endsWith('.update')?'projects.edit':'projects.archive';
  if(action.startsWith('project.dossier.'))return action.endsWith('.review')?'reports.review':action.endsWith('.reassign')?'projects.edit':null;
  if(action==='task.create')return 'tasks.manage';
  if(action==='report.review')return 'reports.review';
