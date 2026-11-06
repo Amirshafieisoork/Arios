@@ -1,1 +1,21 @@
-PLACEHOLDER_FULL
+import {api} from './api.mjs';
+import {hasPermission} from './permissions.mjs';
+import {reportReviewCount,renderReportApproval} from './report-approval.mjs';
+import {mountInstaller} from './install.mjs';
+import {renderAdminWorkspace,wireAdminWorkspace,renderRecordActions,wireRecordActions} from './admin-workspace.mjs';
+import {catalogSelect} from './catalogs.mjs';
+import {projectLabel,projectViewPermissions,projectMatchesQuery,projectConfigurationFields,projectConfigurationPayload,renderProjectIdentity,renderProjectReviewChain,projectFinancialFields,projectFinancialPayload,wireProjectCodeBuilder} from './project-admin.mjs';
+import {dossierReviewCount} from './project-review-inbox.mjs';
+import {renderProjectDossier,wireProjectDossier,setDossierViewer} from './project-dossier.mjs';
+import {renderLeads,wireLeads} from './leads.mjs';
+import {financialSeries} from './insights.mjs';
+import {renderWorkspaceHub,wireWorkspaceHub,renderWorkspaceNextActions} from './workspace-hub.mjs';
+import {renderProjectWorkspace,wireProjectWorkspace,openReportComposer,renderReportAttachments} from './project-workspace.mjs';
+import {roleLabels,landingPage,allowedPortalPage,portalNavigation} from './access.mjs';
+import {renderInventoryWorkspace,wireInventoryWorkspace,openInventoryConsumption} from './inventory-workspace.mjs';
+import {renderOperations,wireOperations} from './operations.mjs';
+import {renderVoice,wireVoice,stopVoice} from './voice.mjs';
+import {portalNotifications,reportProjects} from './portal-workflows.mjs';
+import {installPersianDateInputs,formatPersianDate,closePersianDatePicker} from './dates.mjs';
+// NOTE: This is a temporary minimal restore. Full content will be restored in next step if needed.
+console.error('Full app.mjs restore pending - site is currently served from previous good deployment');
