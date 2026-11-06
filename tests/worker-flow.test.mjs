@@ -119,6 +119,18 @@ async function configuredWorkspace(f) {
   return { workerId, projectId, configured: configured.data };
 }
 
+async function approveHostedReport(f,id,reviewNote='') {
+  let response;
+  for(let step=0;step<6;step++){
+    const snapshot=await f.call('/api/state');assert.equal(snapshot.status,200);
+    const report=snapshot.data.reports.find(row=>row.id===id);assert(report);
+    response=await f.action('report.review',{id,version:report.version,status:'approved',reviewNote});
+    assert.equal(response.status,200,JSON.stringify(response.data));
+    assert.equal(response.data.state.reports.find(row=>row.id===id).status,step===5?'approved':'submitted');
+  }
+  return response;
+}
+
 test('hosted owner bootstraps an empty durable workspace and identities are authorized', async t => {
   const f = fixture(t);
   const anonymous = await f.call('/api/state', { identity: null });
@@ -218,7 +230,7 @@ test('Telegram voice becomes one editable draft and one reviewed report across d
   assert.equal(canonical.projectId, projectId);
   assert.equal(canonical.start, fields.start);
   assert.equal(canonical.description, fields.description);
-  const reviewed = await f.action('report.review', { id: report.id, status: 'approved', reviewNote: 'کار بررسی و تأیید شد.' });
+  const reviewed = await approveHostedReport(f, report.id, 'کار بررسی و تأیید شد.');
   assert.equal(reviewed.status, 200);
   assert.equal(reviewed.data.state.reports[0].laborCost, 900000);
   const submittedDraft = (await f.call('/api/voice')).data.drafts[0];
@@ -401,7 +413,7 @@ test('manager assistant receives operational context without finance or worker r
   const { workerId, projectId } = await configuredWorkspace(f);
   const report = await f.action('report.create', { workerId, projectId, date: '2026-10-20', start: '09:00', end: '17:00', breakMinutes: 30, description: 'نصب تجهیزات شبکه', output: 'تست انجام شد.' });
   assert.equal(report.status, 200);
-  assert.equal((await f.action('report.review', { id: report.data.result.id, status: 'approved' })).status, 200);
+  assert.equal((await approveHostedReport(f, report.data.result.id)).status, 200);
   assert.equal((await f.action('invoice.create', { projectId, title: 'صورت‌حساب محرمانه', amount: 7000000, dueDate: '2026-10-25' })).status, 200);
   const assistant = await f.post('/api/assistant', { projectId, message: 'برای بررسی قطع ارتباط دوربین چه کنم؟' });
   assert.equal(assistant.status, 200, JSON.stringify(assistant.data));

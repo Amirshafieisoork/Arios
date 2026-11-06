@@ -1,3 +1,4 @@
+import {hasPermission} from './permissions.mjs';
 const list=value=>Array.isArray(value)?value:[];
 const statusLabels={submitted:'در حال بررسی',approved:'تأیید نهایی',changes_requested:'نیازمند اصلاح',rejected:'رد شده'};
 
@@ -8,7 +9,7 @@ export function currentDossierStage(project) {
 }
 
 export function dossierAwaitingMe(project,user) {
-  return Boolean(user&&!user.deletedAt&&['manager','worker','accountant'].includes(user.role)&&currentDossierStage(project)?.userId===user.id);
+  return Boolean(user&&!user.deletedAt&&user.role!=='customer'&&hasPermission(user,'reports.review')&&currentDossierStage(project)?.userId===user.id);
 }
 
 export function dossierReviewCount(state) {
@@ -16,7 +17,7 @@ export function dossierReviewCount(state) {
 }
 
 export function renderProjectReviewInbox(state,ctx,{projectId}={}) {
-  if(!['manager','worker','accountant'].includes(state.user?.role))return '';
+  if(!state.user||state.user.role==='customer'||!hasPermission(state.user,'reports.review',state))return '';
   const projects=list(state.projects).filter(project=>!projectId||project.id===projectId);
   if(!projects.length)return '';
   const ordered=[...projects].sort((a,b)=>Number(dossierAwaitingMe(b,state.user))-Number(dossierAwaitingMe(a,state.user)));

@@ -1,3 +1,6 @@
+import {hasPermission,effectivePermissions,requirePermission,assertActionPermission,applyPermissionOverrides,canAdministerPerson,redactProjectionPrices,redactActionResult} from './permissions.mjs';
+import {applySupportAction,supportTicketSnapshot,supportTicketVisible} from './support-workflow.mjs';
+import {startReportApproval,applyReportReview,safeReportApproval,reportAwaitingMe} from './report-approval.mjs';
 import { normalizePhone, normalizeUsername, internalAuthEmail } from './identity.mjs';
 import { applyDossierAction, safeDossierSubmission, safeDossierWorksheet } from './dossier-model.mjs';
 import { applyDossierWorkflow } from './approval-workflow.mjs';
@@ -72,9 +75,10 @@ export function projectAccess(state, userOrId, projectId) {
   const user = state.users.find(item => item.id === userId);
   const project = state.projects.find(item => item.id === projectId);
   if (!user || user.deletedAt || !project || (project.archivedAt && user.role !== 'manager')) return false;
-  return user.role === 'manager' || (user.role === 'customer' && project.customerId === user.id) || (user.role === 'worker' && project.memberIds.includes(user.id));
+  if(!hasPermission(user,'projects.view',state))return false;
+  return user.role === 'manager' || (user.role === 'customer' ? project.customerId === user.id : (project.memberIds||[]).includes(user.id)||project.createdBy===user.id);
 }
-const reviewerRoles = ['manager', 'worker', 'accountant'];
+const reviewerRoles = ['manager', 'worker', 'accountant','warehouse'];
 const assignedStages = (submission, userId) => (submission?.approval?.stages || []).some(stage => stage.userId === userId);
 export function projectReviewerAccess(state, userOrId, projectId) {
   const userId = typeof userOrId === 'object' ? userOrId?.id : userOrId;
@@ -85,8 +89,9 @@ export function projectReviewerAccess(state, userOrId, projectId) {
 export function projectReadAccess(state, userOrId, projectId) {
   const userId = typeof userOrId === 'object' ? userOrId?.id : userOrId;
   const user = state.users.find(item => item.id === userId);
-  if (state.projects.some(project=>project.id===projectId&&project.archivedAt) && user?.role !== 'manager') return false;
-  return projectAccess(state,userId,projectId) || Boolean(user && !user.deletedAt && user.role === 'accountant' && state.projects.some(project => project.id === projectId)) || projectReviewerAccess(state,userId,projectId);
+  const archived=state.projects.find(project=>project.id===projectId&&project.archivedAt);
+  if(archived&&user?.role!=='manager')return Boolean(user&&!user.deletedAt&&hasPermission(user,'projects.archive',state)&&hasPermission(user,'projects.view',state)&&((archived.memberIds||[]).includes(user.id)||archived.createdBy===user.id));
+  return projectAccess(state,userId,projectId) || Boolean(user && !user.deletedAt && user.role === 'accountant' && hasPermission(user,'finance.view',state) && state.projects.some(project => project.id === projectId)) || projectReviewerAccess(state,userId,projectId) || Boolean(user&&hasPermission(user,'reports.review',state)&&state.reports.some(report=>report.projectId===projectId&&reportAwaitingMe(report,user,state.projects.find(project=>project.id===projectId))));
 }
 export const PROJECT_APPROVAL_LABELS = Object.freeze(['مسئول پروژه', 'مسئول واحد', 'مدیر گروه فنی', 'واحد فروش', 'واحد مالی', 'مدیرعامل']);
 export function normalizeProjectCode(value) {
@@ -104,7 +109,7 @@ function projectMetadata(state, payload, previous = {}) {
   const reviewChain = values.reviewChain.map((stage,index) => {
     if (!record(stage) || (stage.label !== undefined && stage.label !== PROJECT_APPROVAL_LABELS[index])) fail('ترتیب شش مسئولیت تأیید معتبر نیست.');
     const person = find(state.users,text(stage.userId,'تأییدکننده',{max:120}),'تأییدکننده');
-    if (person.deletedAt || !reviewerRoles.includes(person.role)) fail('تأییدکننده باید حساب فعال مدیر، نیرو یا حسابدار باشد.');
+    if (person.deletedAt || !reviewerRoles.includes(person.role) || !hasPermission(person,'reports.review',state)) fail('تأییدکننده باید حساب فعال مدیر، نیرو یا حسابدار باشد.');
     if (index === 0 && person.id !== lead.id) fail('نخستین تأیید باید با مسئول پروژه باشد.');
     return {label:PROJECT_APPROVAL_LABELS[index],userId:person.id};
   });
@@ -119,8 +124,8 @@ function requireProject(state, user, projectId) {
 function manager(user) { if (user.role !== 'manager') fail('این عملیات فقط برای مدیر مجاز است.', 403, 'FORBIDDEN'); }
 function roleAllowed(user, roles) { if (!roles.includes(user.role)) fail('دسترسی این عملیات برای حساب شما فعال نیست.', 403, 'FORBIDDEN'); }
 function inventoryProject(state, user, projectId) {
-  roleAllowed(user, ['manager', 'warehouse', 'worker']);
-  const project=user.role === 'worker' ? requireProject(state, user, projectId) : find(state.projects, projectId, 'پروژه');
+  requirePermission(user,'inventory.issue',state);
+  const project=['manager','warehouse'].includes(user.role) ? find(state.projects,projectId,'پروژه') : requireProject(state,user,projectId);
   if(project.archivedAt)fail('پروژه حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'PROJECT_ARCHIVED');
   return project;
 }
@@ -130,7 +135,8 @@ function activeStock(state, stockId) {
   return stock;
 }
 function financialProject(state, user, projectId) {
-  roleAllowed(user, ['manager', 'accountant']);
+  requirePermission(user,'finance.manage',state);requirePermission(user,'projects.prices',state);
+  if(!['manager','accountant'].includes(user.role)&&!projectReadAccess(state,user,projectId))fail('به این پروژه دسترسی ندارید.',403,'FORBIDDEN');
   const project=find(state.projects, projectId, 'پروژه');
   if(project.archivedAt)fail('پروژه حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'PROJECT_ARCHIVED');
   return project;
@@ -154,6 +160,7 @@ function safeUser(user, includeRates = false) {
 function safeReport(report, includeRates) {
   const result = pick(report, ['id', 'projectId', 'workerId', 'date', 'start', 'end', 'breakMinutes', 'description', 'output', 'status', 'minutes', 'createdAt', 'version', 'reviewNote', 'reviewedBy', 'location', 'photoIds']);
   if (includeRates) Object.assign(result, pick(report, ['rate', 'laborCost']));
+  if(report.approval)result.approval=safeReportApproval(report);
   return result;
 }
 function dossierDescriptor(submission) {
@@ -173,7 +180,7 @@ export function readDossierSubmission(state,userOrId,projectId,submissionId) {
   const selectedId = text(submissionId,'شناسه نسخه',{max:120});
   const submission = [project.dossierSubmission,...(project.dossierSubmissionHistory || [])].find(item=>item?.id===selectedId);
   if (!submission) fail('نسخهٔ پرونده یافت نشد.',404,'DOSSIER_SUBMISSION_NOT_FOUND');
-  const financial = ['manager','accountant'].includes(user.role);
+  const financial = hasPermission(user,'projects.prices',state)&&hasPermission(user,'finance.view',state);
   const configuredReviewer = project.projectManagerId===user.id || (project.reviewChain || []).some(stage=>stage.userId===user.id);
   if (!financial && !configuredReviewer && !assignedStages(submission,user.id)) fail('این نسخهٔ پرونده برای شما در دسترس نیست.',403,'FORBIDDEN');
   return safeDossierSubmission(submission,financial);
@@ -192,14 +199,16 @@ export function publicState(state, userId) {
   const isWorker = user.role === 'worker';
   const isWarehouse = user.role === 'warehouse';
   const isAccountant = user.role === 'accountant';
-  const finance = isManager || isAccountant;
-  const stockManager = isManager || isWarehouse;
+  const projectPrices=hasPermission(user,'projects.prices',state);
+  const finance = user.role!=='customer'&&hasPermission(user,'finance.view',state)&&projectPrices;
+  const stockManager = hasPermission(user,'inventory.view',state);
+  const projectDirectory=hasPermission(user,'projects.create',state)||hasPermission(user,'projects.edit',state)||hasPermission(user,'people.manage',state);
   const projects = state.projects.filter(project => !project.archivedAt && (isWarehouse || projectReadAccess(state, user, project.id)));
   const projectIds = new Set(projects.map(project => project.id));
   const scoped = list => list.filter(item => !item.archivedAt && projectIds.has(item.projectId));
   const canExecute = projectId => projectAccess(state,user,projectId);
   const liveReviewer = project => reviewerRoles.includes(user.role) && (project.projectManagerId === user.id || (project.reviewChain || []).some(stage => stage.userId === user.id));
-  const tickets = isWarehouse || isAccountant ? [] : scoped(state.tickets).filter(ticket => canExecute(ticket.projectId));
+  const tickets = scoped(state.tickets).filter(ticket=>canExecute(ticket.projectId)&&supportTicketVisible(ticket,user,state));
   const messages = isWarehouse || isAccountant ? [] : scoped(state.messages).filter(message => canExecute(message.projectId) && (user.role !== 'customer' || !message.internal));
   const contactIds = new Set([user.id]);
   const referenceIds = new Set();
@@ -222,18 +231,19 @@ export function publicState(state, userId) {
   for (const ticket of tickets) { contactIds.add(ticket.authorId); for (const reply of ticket.replies || []) contactIds.add(reply.authorId); }
   if (!isWarehouse && !isAccountant) for (const person of state.users) if (person.role === 'manager') contactIds.add(person.id);
   const result = {
-    user: {...safeUser(user, finance),...managementRoleDetails(state,user)},
-    users: state.users.filter(person => finance || (isWarehouse && ['manager','worker','warehouse','accountant'].includes(person.role)) || contactIds.has(person.id) || referenceIds.has(person.id)).map(person => {
-      if (person.id === user.id || isManager) return {...safeUser(person, finance),...managementRoleDetails(state,person),...(isManager?pick(person,['availability','workStart','workEnd']):{})};
+    user: {...safeUser(user, finance),...managementRoleDetails(state,user),permissions:effectivePermissions(user,state),permissionOverrides:copy(user.permissions||{})},
+    users: state.users.filter(person => finance || projectDirectory || (isWarehouse && ['manager','worker','warehouse','accountant'].includes(person.role)) || contactIds.has(person.id) || referenceIds.has(person.id)).map(person => {
+      if (person.id===user.id||hasPermission(user,'people.manage',state))return{...safeUser(person,finance),...managementRoleDetails(state,person),permissions:effectivePermissions(person,state),permissionOverrides:copy(person.permissions||{}),...pick(person,['availability','workStart','workEnd'])};
+      if(projectDirectory)return pick(person,['id','name','role','deletedAt','personnelCode']);
       if (isWarehouse) return pick(person, ['id', 'name', 'role', 'deletedAt']);
       if (isAccountant) return pick(person, ['id', 'name', 'role', 'hourlyRate', 'rateHistory', 'deletedAt']);
       return contactIds.has(person.id) ? safeUser(person) : pick(person,['id','name','role','deletedAt','employeeCode','personnelCode']);
     }),
     projects: projects.map(project => {
-      if (isWarehouse) return pick(project, ['id', 'name', 'type', 'status', 'projectCode']);
+      if (isWarehouse&&!projectAccess(state,user,project.id))return pick(project,['id','name','type','status','projectCode']);
       const item = pick(project, isAccountant ? ['id', 'name', 'type', 'customerId', 'memberIds', 'status', 'progress', 'startDate', 'endDate', 'cover'] : ['id', 'name', 'type', 'customerId', 'memberIds', 'contactIds', 'location', 'status', 'progress', 'startDate', 'endDate', 'description', 'phases', 'cover', 'clientNote']);
       Object.assign(item,pick(project,['projectCode','projectManagerId','customerCode','dossierCode','dossierTitle']));
-      item.canRecordWork = ['manager','worker'].includes(user.role) && canExecute(project.id);
+      item.canRecordWork = hasPermission(user,'reports.submit',state) && canExecute(project.id);
       if (finance || isWorker) {
         item.dossierVersion = project.dossier?.version || 0;
         Object.assign(item,pick(project,['reviewChain']));
@@ -242,37 +252,37 @@ export function publicState(state, userId) {
         if (project.dossierSubmissionHistory) item.dossierSubmissionHistory = project.dossierSubmissionHistory.filter(submission=>finance || liveReviewer(project) || assignedStages(submission,user.id)).map(dossierDescriptor);
       }
       if (!isAccountant) {
-        if ((isManager || isWorker) && canExecute(project.id)) item.tasks = (project.tasks || []).filter(task=>!task.archivedAt).map(task => pick(task, ['id', 'title', 'description', 'assigneeId', 'dueDate', 'status', 'version', 'createdAt', 'updatedAt']));
+        if (user.role!=='customer' && canExecute(project.id)) item.tasks = (project.tasks || []).filter(task=>!task.archivedAt&&(!task.sourceTicketId||task.assigneeId===user.id||hasPermission(user,'support.manage',state)||hasPermission(user,'support.assign',state))).map(task => pick(task, ['id', 'title', 'description', 'assigneeId', 'dueDate', 'status', 'version', 'createdAt', 'updatedAt','sourceTicketId']));
       }
       const reviewPhotoIds = new Set();
       if (liveReviewer(project)) for (const report of state.reports.filter(report=>report.projectId===project.id)) for (const photoId of report.photoIds || []) reviewPhotoIds.add(photoId);
       for (const submission of [project.dossierSubmission,...(project.dossierSubmissionHistory || [])]) if (assignedStages(submission,user.id)) for (const report of submission.snapshot?.reports || []) for (const photoId of report.photoIds || []) reviewPhotoIds.add(photoId);
       if (!isAccountant || reviewPhotoIds.size) item.files = (project.files || []).filter(file => !file.archivedAt && file.status === 'ready' && (!file.draftId || file.reportId || file.uploadedBy === user.id) && (canExecute(project.id) ? (user.role !== 'customer' || file.clientVisible === true) : reviewPhotoIds.has(file.id) && ['image/jpeg','image/png','image/webp'].includes(file.mimeType) && (!file.draftId || file.reportId))).map(file => pick(file, ['id', 'name', 'mimeType', 'size', 'uploadedBy', 'createdAt', 'clientVisible', 'reportId']));
       if(isManager)item.archivedFiles=(project.files||[]).filter(file=>file.archivedAt&&file.status==='ready'&&(!file.draftId||file.reportId||file.uploadedBy===user.id)).map(file=>pick(file,['id','name','mimeType','size','uploadedBy','createdAt','clientVisible','reportId','archivedAt','archivedBy','updatedAt']));
-      if (finance) {
+      if (projectPrices&&user.role!=='customer') {
         Object.assign(item, pick(project, ['budget', 'contractAmount']));
         if (isManager) Object.assign(item, pick(project, ['publicVisible', 'publicTitle', 'publicSummary']));
         item.laborCost = state.reports.filter(report => !report.archivedAt && report.projectId === project.id && report.status === 'approved').reduce((sum, report) => sum + report.laborCost, 0);
-      } else if (!isWorker) Object.assign(item, pick(project, ['contractAmount']));
+      } else if (projectPrices) Object.assign(item, pick(project, ['contractAmount']));
       return item;
     }),
-    reports: user.role === 'customer' || isWarehouse ? [] : scoped(state.reports).filter(report => finance || (report.workerId === user.id && canExecute(report.projectId)) || liveReviewer(state.projects.find(project=>project.id===report.projectId))).map(report => safeReport(report, finance)),
-    materials: scoped(state.materials).filter(material => (isWarehouse || finance || canExecute(material.projectId) || liveReviewer(state.projects.find(project=>project.id===material.projectId))) && (user.role !== 'customer' || material.clientVisible)).map(material => safeMaterial(material, !isWorker, stockManager || isWorker)),
-    invoices: isWorker || isWarehouse ? [] : scoped(state.invoices).map(invoice => pick(invoice, ['id', 'projectId', 'title', 'amount', 'paid', 'dueDate', 'status'])),
+    reports: user.role === 'customer' ? [] : scoped(state.reports).filter(report => finance || (report.workerId === user.id && canExecute(report.projectId)) || liveReviewer(state.projects.find(project=>project.id===report.projectId)) || reportAwaitingMe(report,user,state.projects.find(project=>project.id===report.projectId))).map(report => safeReport(report, projectPrices&&user.role!=='customer')),
+    materials: scoped(state.materials).filter(material => (isWarehouse || finance || canExecute(material.projectId) || liveReviewer(state.projects.find(project=>project.id===material.projectId))) && (user.role !== 'customer' || material.clientVisible)).map(material => safeMaterial(material, projectPrices||hasPermission(user,'inventory.prices',state), stockManager || isWorker)),
+    invoices: !hasPermission(user,'finance.view',state) ? [] : scoped(state.invoices).map(invoice => pick(invoice, ['id', 'projectId', 'title', 'amount', 'paid', 'dueDate', 'status'])),
     messages: messages.map(safeMessage),
-    tickets: tickets.map(safeTicket),
-    inventory: stockManager || isAccountant ? state.inventory.filter(item => !item.archivedAt).map(item => pick(item, ['id', 'name', 'unit', 'quantity', 'minQuantity', 'unitPrice'])) : [],
-    archivedInventory: stockManager || isAccountant ? state.inventory.filter(item => item.archivedAt).map(item => pick(item, ['id', 'name', 'unit', 'quantity', 'minQuantity', 'unitPrice', 'archivedAt', 'archivedBy'])) : [],
-    stockCatalog: isWorker ? state.inventory.filter(item => !item.archivedAt).map(item => pick(item, ['id', 'name', 'unit', 'quantity'])) : [],
-    receipts: isWorker || isWarehouse ? [] : scoped(state.receipts).map(receipt => pick(receipt, ['id', 'invoiceId', 'projectId', 'amount', 'reference', 'method', 'recordedBy', 'createdAt'])),
+    tickets: tickets.map(supportTicketSnapshot),
+    inventory: stockManager ? state.inventory.filter(item => !item.archivedAt).map(item => pick(item, ['id', 'name', 'unit', 'quantity', 'minQuantity', 'unitPrice'])) : [],
+    archivedInventory: stockManager ? state.inventory.filter(item => item.archivedAt).map(item => pick(item, ['id', 'name', 'unit', 'quantity', 'minQuantity', 'unitPrice', 'archivedAt', 'archivedBy'])) : [],
+    stockCatalog: hasPermission(user,'inventory.issue',state) ? state.inventory.filter(item => !item.archivedAt).map(item => pick(item, ['id', 'name', 'unit', 'quantity'])) : [],
+    receipts: !hasPermission(user,'finance.view',state) ? [] : scoped(state.receipts).map(receipt => pick(receipt, ['id', 'invoiceId', 'projectId', 'amount', 'reference', 'method', 'recordedBy', 'createdAt'])),
     audit: isManager ? state.audit.map(entry => pick(entry, ['id', 'actorId', 'action', 'entityId', 'createdAt', 'description'])) : [],
     reportDrafts: (isManager || isWorker) ? (state.reportDrafts || []).filter(entry => entry.authorId === user.id && !entry.reportId && projectIds.has(entry.projectId)).map(entry => pick(entry, ['id', 'projectId', 'workerId', 'date', 'start', 'end', 'breakMinutes', 'description', 'output', 'location', 'photoIds', 'version', 'updatedAt'])) : [],
     catalogs: readCatalogs(state,{includeArchived:isManager}),
   };
-  if(isManager)result.management=managementSnapshot(state,user);
+  if(user.role!=='customer'){const records=managementSnapshot(state,user,{canReadProject:projectId=>projectReadAccess(state,user,projectId)});if(isManager||Object.values(records).some(rows=>Array.isArray(rows)&&rows.length))result.management=records;}
   if(isManager)result.managementRoles=managementRoleSnapshot(state,user);
   if(user.role!=='customer'){result.personalStock=personalStockSnapshot(state,user);result.employeeFinance=employeeFinanceSnapshot(state,user);}
-  return result;
+  return redactProjectionPrices(result,user,state);
 }
 
 function historicalRate(worker, date) {
@@ -311,7 +321,9 @@ export function applyAction(state, userId, action, payload = {}) {
   const draft = copy(state);
   for (const name of arrayNames) if (!Array.isArray(draft[name])) fail('ساختار اطلاعات معتبر نیست.', 500, 'INVALID_STATE');
   const user = getUser(draft, userId);
+  assertActionPermission(user,action,payload,draft);
   let result;
+  const supportOutcome=applySupportAction(draft,user,action,payload,{projectAccess});
   if(!action.startsWith('admin.record.')&&!action.startsWith('catalog.')){
     const collectionByPrefix={report:'reports',material:'materials',invoice:'invoices',ticket:'tickets'};
     const prefix=action.split('.')[0];
@@ -324,7 +336,13 @@ export function applyAction(state, userId, action, payload = {}) {
     if(target?.archivedAt)fail('رکورد حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'RECORD_ARCHIVED');
     if(prefix==='task'&&project?.tasks?.some(task=>task.id===payload.id&&task.archivedAt))fail('وظیفه حذف شده است؛ ابتدا آن را بازیابی کنید.',409,'RECORD_ARCHIVED');
   }
-  if(action.startsWith('finance.')) {
+  if(supportOutcome.handled){result=supportOutcome.result;} else if(action==='account.permissions.update'){
+    const person=find(draft.users,text(payload.id,'شناسه حساب',{max:120}),'فرد');
+    if(person.deletedAt)fail('ابتدا دسترسی فرد را بازیابی کنید.',409,'ACCOUNT_ARCHIVED');
+    applyPermissionOverrides(draft,user,person,payload.permissions);
+    result={id:person.id,permissions:effectivePermissions(person,draft),permissionOverrides:copy(person.permissions||{})};
+    audit(draft,user,action,person,'سطح دسترسی فرد به‌روزرسانی شد.');
+  } else if(action.startsWith('finance.')) {
     result=applyFinanceAction(draft,user,action,payload);
     audit(draft,user,action,{id:result.id},'سند مالی ثبت شد؛ اسناد پیشین بدون بازنویسی حفظ شدند.');
   } else if(action.startsWith('personalStock.')) {
@@ -333,13 +351,14 @@ export function applyAction(state, userId, action, payload = {}) {
   } else if(action==='account.primary-manager.transfer') {
     result=applyPrimaryManagerTransfer(draft,user,payload);
   } else if (action.startsWith('admin.record.')) {
-    result=applyAdminRecordAction(draft,user,action,payload,{fail,historicalRate,reportLocation,reportPhotos,run:(operation,input)=>applyAction(draft,user.id,operation,input)});
+    result=applyAdminRecordAction(draft,user,action,payload,{fail,historicalRate,reportLocation,reportPhotos,canReadProject:projectId=>projectReadAccess(draft,user,projectId),run:(operation,input)=>applyAction(draft,user.id,operation,input)});
     audit(draft,user,action,{id:payload.id},`مدیریت ${payload.collection}: ${payload.reason||'اصلاح یا بازیابی رکورد'}`);
   } else if(action.startsWith('catalog.')) {
     result=applyCatalogAction(draft,user,action,payload);
     audit(draft,user,action,result,'فهرست دسته‌بندی‌های سازمان به‌روزرسانی شد.');
   } else if (action === 'project.create') {
-    manager(user);
+    requirePermission(user,'projects.create',draft);
+    if(!hasPermission(user,'projects.prices',draft)){if(payload.budget!==undefined||payload.contractAmount!==undefined)fail('دسترسی ثبت مبلغ پروژه فعال نیست.',403,'FORBIDDEN');payload={...payload,budget:0,contractAmount:0};}
     const name = text(payload.name, 'نام پروژه', { max: 160 });
     const type = text(payload.type, 'نوع پروژه', { max: 80 });
     const customerId = payload.customerId || null;
@@ -352,10 +371,12 @@ export function applyAction(state, userId, action, payload = {}) {
     if (endDate < startDate) fail('پایان پروژه نباید پیش از شروع باشد.');
     const cover = /event|مراسم|همایش/i.test(type) ? 'event' : /electric|برق/i.test(type) ? 'electric' : /media|رسانه/i.test(type) ? 'media' : 'building';
     result = { id: id('p'), name, type, customerId, memberIds, location: text(payload.location, 'موقعیت', { max: 240 }), status: 'active', progress: 0, budget: integer(payload.budget, 'بودجه'), contractAmount: integer(payload.contractAmount, 'مبلغ قرارداد'), startDate, endDate, description: text(payload.description, 'شرح پروژه', { optional: true }), phases: ['برنامه‌ریزی', 'اجرا', 'آزمایش و تحویل'].map(name => ({ id: id('ph'), name, progress: 0 })), cover, clientNote: '', publicVisible: bool(payload.publicVisible), publicTitle: text(payload.publicTitle, 'عنوان عمومی', { optional: true, max: 160 }), publicSummary: text(payload.publicSummary, 'شرح عمومی', { optional: true, max: 1000 }) };
-    Object.assign(result,projectMetadata(draft,payload));
+    Object.assign(result,projectMetadata(draft,payload),{createdBy:user.id});
     draft.projects.push(result); audit(draft, user, action, result, 'پروژه ایجاد شد.');
   } else if (action === 'project.update') {
-    manager(user);
+    requirePermission(user,'projects.edit',draft);
+    if(!projectReadAccess(draft,user,payload.id))fail('به این پروژه دسترسی ندارید.',403,'FORBIDDEN');
+    if(['budget','contractAmount'].some(key=>payload[key]!==undefined))requirePermission(user,'projects.prices',draft);
     const project = find(draft.projects, payload.id, 'پروژه');
     for(const [key,label,max] of [['name','نام پروژه',160],['type','نوع پروژه',80],['location','موقعیت',240]])if(payload[key]!==undefined)project[key]=text(payload[key],label,{max});
     if(payload.description!==undefined)project.description=text(payload.description,'شرح پروژه',{optional:true});
@@ -388,6 +409,8 @@ export function applyAction(state, userId, action, payload = {}) {
     if (payload.publicSummary !== undefined) project.publicSummary = text(payload.publicSummary, 'شرح عمومی', { optional: true, max: 1000 });
     result = project; audit(draft, user, action, project, 'اطلاعات پروژه به‌روزرسانی شد.');
   } else if (action === 'project.dossier.save' || action.startsWith('project.dossier.')) {
+    if(['project.dossier.save','project.dossier.revise'].includes(action)){requirePermission(user,'finance.manage',draft);requirePermission(user,'projects.prices',draft);}
+    if(action==='project.dossier.submit'&&!hasPermission(user,'finance.manage',draft))requirePermission(user,'reports.submit',draft);
     result = action === 'project.dossier.save' ? applyDossierAction(draft,user,action,payload) : applyDossierWorkflow(draft,user,action,payload,PROJECT_APPROVAL_LABELS);
     audit(draft,user,action,{id:payload.projectId},'پروندهٔ گزارش تفصیلی به‌روزرسانی شد.');
   } else if (action === 'task.create' || action === 'task.update') {
@@ -395,7 +418,7 @@ export function applyAction(state, userId, action, payload = {}) {
     const project = requireProject(draft, user, payload.projectId);
     project.tasks ||= [];
     if (action === 'task.create') {
-      manager(user);
+      requirePermission(user,'tasks.manage',draft);
       if (project.tasks.length >= 300) fail('حداکثر ۳۰۰ وظیفه برای این پروژه قابل ثبت است.');
       const assigneeId = payload.assigneeId || null;
       if (assigneeId && (!project.memberIds.includes(assigneeId) || !draft.users.some(person=>person.id===assigneeId&&person.role==='worker'&&!person.deletedAt))) fail('مسئول وظیفه باید نیروی فعال همین پروژه باشد.');
@@ -405,8 +428,8 @@ export function applyAction(state, userId, action, payload = {}) {
     } else {
       const task = find(project.tasks, payload.id, 'وظیفه');
       if (payload.version !== task.version) fail('وظیفه تغییر کرده است؛ صفحه را تازه کنید.', 409, 'VERSION_CONFLICT');
-      if (user.role !== 'manager' && task.assigneeId !== user.id) fail('فقط وضعیت وظیفهٔ خود را تغییر دهید.', 403, 'FORBIDDEN');
-      if (user.role !== 'manager' && ['title', 'description', 'assigneeId', 'dueDate'].some(key => payload[key] !== undefined)) fail('ویرایش برنامهٔ وظیفه برای مدیر مجاز است.', 403, 'FORBIDDEN');
+      if (!hasPermission(user,'tasks.manage',draft) && task.assigneeId !== user.id) fail('فقط وضعیت وظیفهٔ خود را تغییر دهید.', 403, 'FORBIDDEN');
+      if (!hasPermission(user,'tasks.manage',draft) && ['title', 'description', 'assigneeId', 'dueDate'].some(key => payload[key] !== undefined)) fail('ویرایش برنامهٔ وظیفه برای مدیر مجاز است.', 403, 'FORBIDDEN');
       if (payload.title !== undefined) task.title = text(payload.title, 'عنوان وظیفه', {max: 240});
       if (payload.description !== undefined) task.description = text(payload.description, 'شرح مأموریت', {optional: true, max: 2000});
       if (payload.assigneeId !== undefined) { if (payload.assigneeId && (!project.memberIds.includes(payload.assigneeId)||!draft.users.some(person=>person.id===payload.assigneeId&&person.role==='worker'&&!person.deletedAt))) fail('مسئول وظیفه باید نیروی فعال همین پروژه باشد.'); task.assigneeId = payload.assigneeId || null; }
@@ -450,6 +473,7 @@ export function applyAction(state, userId, action, payload = {}) {
   } else if (action === 'account.update') {
     manager(user);
     const person = find(draft.users, text(payload.id, 'شناسه حساب', { max: 120 }), 'حساب');
+    if(!canAdministerPerson(draft,user,person))fail('ویرایش این حساب به دسترسی کامل‌تری نیاز دارد.',403,'FORBIDDEN');
     const ownership=managementRoleSnapshot(draft,user);
     if(person.id===ownership?.primaryManagerId && person.id!==user.id && !ownership.canTransferPrimary) fail('ویرایش حساب مدیر اصلی فقط برای خود مدیر اصلی مجاز است.',403,'PRIMARY_MANAGER_REQUIRED');
     if (person.deletedAt) fail('پیش از ویرایش، حساب حذف‌شده را بازیابی کنید.', 409, 'ACCOUNT_ARCHIVED');
@@ -507,8 +531,11 @@ export function applyAction(state, userId, action, payload = {}) {
       if (project.customerId === person.id) project.customerId = null;
       project.contactIds = (project.contactIds || []).filter(value => value !== person.id);
     }
+    if(!canAdministerPerson(draft,user,{...person,role:requestedRole}))fail('واگذاری این نقش از دسترسی فعلی شما بیشتر است.',403,'FORBIDDEN');
+    if(payload.personDetails?.hourlyRate!==undefined)requirePermission(user,'projects.prices',draft);
     person.role = requestedRole;
     applyPersonProfile(person,payload);
+    if(payload.permissions!==undefined)applyPermissionOverrides(draft,user,person,payload.permissions);
     result = { ...safeUser(person, true), warnings };
     audit(draft, user, action, person, 'اطلاعات تماس و نقش حساب به‌روزرسانی شد.');
   } else if (action === 'account.archive' || action === 'account.restore') {
@@ -529,7 +556,7 @@ export function applyAction(state, userId, action, payload = {}) {
     const sourceDraft = payload.draftId ? find(draft.reportDrafts || [], payload.draftId, 'پیش‌نویس') : null;
     if (sourceDraft && sourceDraft.authorId !== user.id) fail('پیش‌نویس در دسترس نیست.',403,'FORBIDDEN');
     if (sourceDraft) requireProject(draft,user,sourceDraft.projectId);
-    if (sourceDraft?.reportId) return safeReport(find(draft.reports,sourceDraft.reportId,'گزارش'),user.role==='manager');
+    if (sourceDraft?.reportId) return redactActionResult(safeReport(find(draft.reports,sourceDraft.reportId,'گزارش'),user.role==='manager'),action,payload,user,draft);
     const project = requireProject(draft, user, payload.projectId);
     if (user.role === 'worker' && payload.workerId !== undefined && payload.workerId !== user.id) fail('گزارش را فقط برای خود ثبت کنید.', 403, 'FORBIDDEN');
     const workerId = user.role === 'worker' ? user.id : payload.workerId;
@@ -545,13 +572,14 @@ export function applyAction(state, userId, action, payload = {}) {
     result.location=reportLocation(payload.location);
     result.photoIds=reportPhotos(project,payload.photoIds,user,sourceDraft?.id);
     if (sourceDraft) {sourceDraft.reportId=result.id;sourceDraft.completedAt=now();for(const file of project.files||[])if(result.photoIds.includes(file.id))file.reportId=result.id;}
+    startReportApproval(draft,user,result,project,{allowUnconfigured:true});
     draft.reports.push(result); audit(draft, user, action, result, 'گزارش برای بررسی ثبت شد.');
     result = safeReport(result, user.role === 'manager');
   } else if (action === 'report.update') {
-    if (!['worker', 'manager'].includes(user.role)) fail('اصلاح گزارش برای این حساب مجاز نیست.', 403, 'FORBIDDEN');
+    if (!hasPermission(user,'reports.submit',draft)&&!hasPermission(user,'reports.manage',draft)) fail('اصلاح گزارش برای این حساب مجاز نیست.', 403, 'FORBIDDEN');
     const report = find(draft.reports, payload.id, 'گزارش');
     requireProject(draft, user, report.projectId);
-    if (user.role === 'worker' && report.workerId !== user.id) fail('فقط گزارش خود را اصلاح کنید.', 403, 'FORBIDDEN');
+    if (!hasPermission(user,'reports.manage',draft) && report.workerId !== user.id) fail('فقط گزارش خود را اصلاح کنید.', 403, 'FORBIDDEN');
     if (!['submitted', 'changes_requested', 'rejected'].includes(report.status)) fail('گزارش تأییدشده تغییرپذیر نیست.', 409, 'IMMUTABLE_REPORT');
     integer(payload.version, 'نسخه گزارش', 1);
     if (payload.version !== report.version) fail('گزارش تغییر کرده است؛ صفحه را تازه‌سازی کنید.', 409, 'VERSION_CONFLICT');
@@ -570,28 +598,13 @@ export function applyAction(state, userId, action, payload = {}) {
     const location=payload.location!==undefined?reportLocation(payload.location):(moved?null:report.location??null);
     const photoIds=payload.photoIds!==undefined?reportPhotos(project,payload.photoIds,user,undefined):(moved?[]:report.photoIds||[]);
     Object.assign(report, { projectId: project.id, date, start: payload.start, end: payload.end, breakMinutes, description, output, minutes: end - start - breakMinutes, rate, laborCost: 0, status: 'submitted', version: report.version + 1, location, photoIds });
-    delete report.reviewNote;
-    delete report.reviewedBy;
+    startReportApproval(draft,user,report,project,{allowUnconfigured:true});
     audit(draft, user, action, report, 'گزارش اصلاح و دوباره برای بررسی ارسال شد.');
     result = safeReport(report, user.role === 'manager');
   } else if (action === 'report.review') {
-    manager(user);
-    const report = find(draft.reports, payload.id, 'گزارش');
-    const status = choice(payload.status, ['approved', 'changes_requested', 'rejected'], 'وضعیت بررسی');
-    if (report.status === 'approved') {
-      if (status !== 'approved') fail('گزارش تأییدشده تغییرپذیر نیست.', 409, 'IMMUTABLE_REPORT');
-      return safeReport(report, true);
-    }
-    if (status === 'approved') {
-      const overlapping = draft.reports.some(other => !other.archivedAt && other.id !== report.id && other.workerId === report.workerId && other.date === report.date && other.status === 'approved' && clock(report.start) < clock(other.end) && clock(other.start) < clock(report.end));
-      if (overlapping) fail('این بازه با گزارش تأییدشده همین نیرو هم‌پوشانی دارد.', 409, 'TIME_OVERLAP');
-    }
-    report.status = status;
-    report.reviewNote = text(payload.reviewNote, 'یادداشت بررسی', { optional: true });
-    report.reviewedBy = user.id;
-    report.laborCost = status === 'approved' ? roundedLabor(report.rate, report.minutes) : 0;
-    report.version += 1;
-    result = report; audit(draft, user, action, report, status === 'approved' ? 'گزارش تأیید شد.' : 'گزارش بررسی شد.');
+    const report=find(draft.reports,payload.id,'گزارش'),project=find(draft.projects,report.projectId,'پروژه');
+    result=applyReportReview(draft,user,report,project,payload,{roundedLabor});
+    audit(draft,user,action,report,'مرحلهٔ گزارش کار بررسی شد.');
   } else if (action === 'material.consume') {
     const project = inventoryProject(draft, user, payload.projectId);
     const stock = activeStock(draft, payload.inventoryId);
@@ -607,7 +620,7 @@ export function applyAction(state, userId, action, payload = {}) {
     draft.materials.push(material); audit(draft, user, action, material, 'برداشت کالا از انبار برای پروژه ثبت شد.');
     result = safeMaterial(material, user.role !== 'worker', true);
   } else if (action === 'material.return') {
-    roleAllowed(user, ['manager', 'warehouse', 'worker']);
+    requirePermission(user,'inventory.issue',draft);
     const material = find(draft.materials, payload.id, 'مصرف کالا');
     inventoryProject(draft, user, material.projectId);
     if (!material.inventoryId) fail('برای قلم مستقل از انبار، برگشت موجودی ثبت نمی‌شود.', 409, 'NO_STOCK_SOURCE');
@@ -628,7 +641,7 @@ export function applyAction(state, userId, action, payload = {}) {
     audit(draft, user, action, material, 'برگشت کالا از پروژه به انبار ثبت شد.');
     result = safeMaterial(material, user.role !== 'worker', true);
   } else if (action === 'material.create') {
-    manager(user);
+    requirePermission(user,'inventory.issue',draft);requirePermission(user,'projects.prices',draft);
     const project = requireProject(draft, user, payload.projectId);
     const amount = quantity(payload.quantity);
     const unit = text(payload.unit, 'واحد', { max: 40 });
@@ -652,7 +665,7 @@ export function applyAction(state, userId, action, payload = {}) {
     result = { id: id('i'), projectId: project.id, title: text(payload.title, 'عنوان صورت‌حساب', { max: 200 }), amount: integer(payload.amount, 'مبلغ صورت‌حساب', 1), paid: 0, dueDate: isoDate(payload.dueDate, 'سررسید'), status: 'issued' };
     draft.invoices.push(result); audit(draft, user, action, result, 'صورت‌حساب صادر شد.');
   } else if (action === 'payment.record') {
-    roleAllowed(user, ['manager', 'accountant']); const invoice = find(draft.invoices, payload.invoiceId, 'صورت‌حساب');
+    requirePermission(user,'finance.manage',draft);requirePermission(user,'projects.prices',draft); const invoice = find(draft.invoices, payload.invoiceId, 'صورت‌حساب');
     const amount = integer(payload.amount, 'مبلغ دریافت', 1);
     const reference = text(payload.reference, 'شماره پیگیری', { max: 120 });
     if (draft.receipts.some(receipt => receipt.reference === reference)) fail('این شماره پیگیری قبلاً ثبت شده است.', 409, 'DUPLICATE_REFERENCE');
@@ -698,17 +711,19 @@ export function applyAction(state, userId, action, payload = {}) {
     if (applicable) worker.hourlyRate = applicable.hourlyRate;
     result = safeUser(worker, true); audit(draft, user, action, worker, 'نرخ تاریخ‌دار نیرو ثبت شد.');
   } else if (action === 'inventory.create') {
-    roleAllowed(user, ['manager', 'warehouse']);
+    requirePermission(user,'inventory.create',draft);
+    if(payload.unitPrice!==undefined)requirePermission(user,'inventory.prices',draft);
+    if(payload.unitPrice===undefined)payload={...payload,unitPrice:0};
     result = { id: id('inv'), name: text(payload.name, 'نام کالا', { max: 160 }), unit: text(payload.unit, 'واحد', { max: 40 }), quantity: quantity(payload.quantity, 'موجودی اولیه', true), minQuantity: quantity(payload.minQuantity, 'حداقل موجودی', true), unitPrice: integer(payload.unitPrice, 'قیمت واحد') };
     draft.inventory.push(result); audit(draft, user, action, result, 'کالای جدید به انبار افزوده شد.');
   } else if (action === 'inventory.receive') {
-    roleAllowed(user, ['manager', 'warehouse']); const stock = activeStock(draft, payload.id);
+    requirePermission(user,'inventory.edit',draft); const stock = activeStock(draft, payload.id);
     const received = quantity(payload.quantity);
     const sum = Math.round(stock.quantity * 1000) + Math.round(received * 1000);
     if (!Number.isSafeInteger(sum)) fail('موجودی از محدوده مجاز بیشتر است.');
     stock.quantity = sum / 1000; result = stock; audit(draft, user, action, stock, 'ورود کالا به انبار ثبت شد.');
   } else if (action === 'inventory.delete') {
-    roleAllowed(user, ['manager', 'warehouse']);
+    requirePermission(user,'inventory.archive',draft);
     const stock = find(draft.inventory, payload.id, 'کالای انبار');
     if (payload.confirmed !== true) fail('حذف کالا از فهرست فعال باید تأیید شود.', 400, 'CONFIRMATION_REQUIRED');
     const expected = quantity(payload.expectedQuantity, 'موجودی نمایش‌داده‌شده', true);
@@ -738,7 +753,7 @@ export function applyAction(state, userId, action, payload = {}) {
   // must not leave the manager's calculated accounts unreadable through overflow.
   const financialActor=draft.users.find(person=>!person.deletedAt&&['manager','accountant'].includes(person.role));
   if(financialActor)employeeFinanceSnapshot(draft,financialActor);
-  const detachedResult = copy(result);
+  const detachedResult = redactActionResult(result,action,payload,user,draft);
   for (const key of Object.keys(state)) delete state[key];
   Object.assign(state, draft);
   return detachedResult;

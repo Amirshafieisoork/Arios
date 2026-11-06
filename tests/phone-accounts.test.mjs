@@ -4,6 +4,8 @@ import { normalizePhone, phoneAuthEmail, loginIdentity } from '../public/identit
 import { applyAction, createSeedState, publicState, projectAccess } from '../public/domain.mjs';
 import { createAccount, updateAccount, passwordLogin, passwordValue } from '../supabase/functions/arios-api/auth.mjs';
 
+import {configureReportProjects,approveReport} from './helpers/report-approval.mjs';
+
 const PHONE = '+989123456789';
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 function fixture(initial = createSeedState()) {
@@ -83,7 +85,7 @@ test('customer can become a worker with project continuity and historical record
 });
 
 test('worker can become customer without stealing another customer project or losing wages/history', async () => {
-  const state = createSeedState();
+  const state = createSeedState();configureReportProjects(state);
   const report = applyAction(state, 'worker', 'report.create', { projectId: 'p1', date: '2026-10-20', start: '08:00', end: '09:00', breakMinutes: 0, description: 'اجرای تست', output: 'تکمیل' });
   const f = fixture(state), previous = f.read(), personBefore = previous.users.find(user => user.id === 'worker');
   const result = await updateAccount(f.client, f.repo, { id: 'manager', role: 'manager' }, { id: 'worker', role: 'customer', phone: PHONE });
@@ -94,7 +96,7 @@ test('worker can become customer without stealing another customer project or lo
   assert.equal(after.projects.find(project => project.id === 'p1').customerId, previous.projects.find(project => project.id === 'p1').customerId);
   assert(result.result.warnings.length > 0);
   assert.deepEqual(after.reports, previous.reports);
-  const approved = applyAction(after, 'manager', 'report.review', { id: report.id, status: 'approved' });
+  const approved = approveReport(after, report.id);
   assert.equal(approved.status, 'approved'); assert.equal(approved.laborCost, approved.rate);
   assert(publicState(after, 'manager').reports.some(item => item.id === report.id));
 });

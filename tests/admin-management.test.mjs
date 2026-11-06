@@ -3,10 +3,18 @@ import assert from 'node:assert/strict';
 import {applyAction,createSeedState,publicState,projectAccess,projectReadAccess,readDossierSubmission,PROJECT_APPROVAL_LABELS} from '../public/domain.mjs';
 import {buildDossierSummary} from '../public/dossier-model.mjs';
 
+import {approveReport} from './helpers/report-approval.mjs';
+
 const fixture=()=>{const state=createSeedState();state.users.push({id:'warehouse',role:'warehouse',name:'انباردار'},{id:'accountant',role:'accountant',name:'حسابدار'});return state;};
 const record=(state,collection,id)=>state[collection].find(row=>row.id===id);
 const admin=(state,collection,id,operation,extra={})=>applyAction(state,'manager',`admin.record.${operation}`,{collection,id,reason:'اصلاح رکورد با درخواست مدیر',...extra});
 const unchanged=(state,run,code)=>{const before=structuredClone(state);assert.throws(run,error=>!code||error.code===code);assert.deepEqual(state,before);};
+const scopedMaintenance=(view,role)=>{
+ const allowed=role==='warehouse'?new Set(['inventory']):role==='accountant'?new Set(['invoices','receipts']):new Set();
+ if(!allowed.size){assert.equal(view.management,undefined);return;}
+ for(const [collection,rows] of Object.entries(view.management||{}))if(!allowed.has(collection))assert.deepEqual(rows,[],`${role} cannot maintain ${collection}`);
+ assert(!JSON.stringify(view.management||{}).includes('SECRET'));
+};
 const configured=()=>{const state=fixture();applyAction(state,'manager','project.update',{id:'p1',projectCode:'AR-ADMIN',projectManagerId:'manager',reviewChain:PROJECT_APPROVAL_LABELS.map(label=>({label,userId:'manager'}))});return state;};
 
 test('manager maintenance rejects other roles, protected field injection and stale report versions atomically',()=>{
@@ -24,7 +32,8 @@ test('project deletion hides active data from every operational role and blocks 
  admin(state,'projects','p1','archive');
  for(const role of ['worker','customer','warehouse','accountant']){
   assert.equal(projectAccess(state,role,'p1'),false);assert.equal(projectReadAccess(state,role,'p1'),false);
-  const view=publicState(state,role);assert(!view.projects.some(row=>row.id==='p1'));assert(!view.reports.some(row=>row.projectId==='p1'));assert.equal(view.management,undefined);
+  const view=publicState(state,role);assert(!view.projects.some(row=>row.id==='p1'));assert(!view.reports.some(row=>row.projectId==='p1'));scopedMaintenance(view,role);
+  assert(!Object.values(view.management||{}).flat().some(row=>row.projectId==='p1'));
  }
  assert.equal(projectAccess(state,'manager','p1'),true);
  const manager=publicState(state,'manager');assert(!manager.projects.some(row=>row.id==='p1'));
@@ -87,11 +96,11 @@ test('approved report correction preserves frozen evidence and rate history whil
 });
 
 test('archived approved reports leave live labor totals and restores cannot introduce duplicate approved work',()=>{
- const state=fixture(),old=record(state,'reports','r1'),cost=old.laborCost;
+ const state=configured(),old=record(state,'reports','r1'),cost=old.laborCost;
  const previous=publicState(state,'manager').projects.find(row=>row.id==='p1').laborCost;
  admin(state,'reports',old.id,'archive');assert.equal(publicState(state,'manager').projects.find(row=>row.id==='p1').laborCost,previous-cost);
  const replacement=applyAction(state,'manager','report.create',{projectId:'p1',workerId:old.workerId,date:old.date,start:old.start,end:old.end,breakMinutes:old.breakMinutes,description:'گزارش جایگزین'});
- applyAction(state,'manager','report.review',{id:replacement.id,status:'approved'});
+ approveReport(state,replacement.id);
  unchanged(state,()=>admin(state,'reports',old.id,'restore'),'TIME_OVERLAP');assert(record(state,'reports',old.id).archivedAt);
 });
 
@@ -136,7 +145,7 @@ test('manager can amend and recover messages, tickets and stock without exposing
  admin(state,'inventory','inv4','update',{changes:{name:'نام تازه',quantity:5.125,minQuantity:2.5,unitPrice:1000}});assert.equal(record(state,'inventory','inv4').quantity,5.125);
  record(state,'projects','p1').privateSecret='SECRET';record(state,'reports','r1').privateSecret='SECRET';
  assert(!JSON.stringify(publicState(state,'manager').management).includes('SECRET'));
- for(const role of ['worker','customer','warehouse','accountant'])assert.equal(publicState(state,role).management,undefined);
+ for(const role of ['worker','customer','warehouse','accountant'])scopedMaintenance(publicState(state,role),role);
 });
 
 test('manager file lists retain private draft ownership and never leak storage locations',()=>{

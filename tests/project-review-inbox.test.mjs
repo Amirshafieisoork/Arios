@@ -19,7 +19,7 @@ test('aggregate inbox points to the current explicit responsibility, including a
 });
 
 test('review queue counts only this reviewer and links to the aggregate dossier without a write action',()=>{
-  const state={user:{id:'reviewer',role:'accountant'},users:[{id:'reviewer',name:'حسابدار'}],projects:[project(),{id:'blank',name:'پروژه تازه'},project('approved')]};
+  const state={user:{id:'reviewer',role:'accountant'},users:[{id:'reviewer',name:'حسابدار',role:'accountant'}],projects:[project(),{id:'blank',name:'پروژه تازه'},project('approved')]};
   assert.equal(dossierReviewCount(state),1);
   const html=renderProjectReviewInbox(state,ctx);
   assert(html.includes('#project/paper%2F1/dossier'));assert(html.includes('در انتظار مسئول پروژه: حسابدار'));assert(html.includes('پروژه &lt;الف&gt;'));assert(!html.includes('پروژه <الف>'));

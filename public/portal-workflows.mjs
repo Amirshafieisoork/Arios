@@ -1,4 +1,6 @@
 import {currentDossierStage,dossierAwaitingMe} from './project-review-inbox.mjs';
+import {currentReportStage,reportAwaitingMe} from './report-approval.mjs';
+import {hasPermission} from './permissions.mjs';
 // Derived views use only the current user's authorized workspace snapshot.
 const rows = value => Array.isArray(value) ? value : [];
 const timestamp = value => Number.isFinite(Date.parse(value || '')) ? Date.parse(value) : 0;
@@ -30,13 +32,18 @@ export function portalNotifications(state) {
   }
   for (const report of rows(state.reports)) {
     if (!projects.has(report.projectId)) continue;
-    if (manager && report.status === 'submitted') add({ id: `report:${report.id}`, kind: 'report', title: 'گزارش آمادهٔ بررسی', detail: report.description, projectId: report.projectId, href: '#reports', date: report.createdAt || report.date });
+    const project=rows(state.projects).find(project=>project.id===report.projectId),stage=currentReportStage(report,project);
+    if (reportAwaitingMe(report,user,project)) add({ id: `report:${report.id}`, kind: 'report', title: `گزارش منتظر تأیید ${stage.label}`, detail: report.description, projectId: report.projectId, href: '#reports', date: report.updatedAt || report.createdAt || report.date });
     if (user.role === 'worker' && report.workerId === user.id && ['changes_requested', 'rejected'].includes(report.status)) add({ id: `review:${report.id}`, kind: 'review', title: 'گزارش نیازمند اصلاح', detail: report.reviewNote || report.description, projectId: report.projectId, href: '#reports', date: report.reviewedAt || report.createdAt || report.date });
   }
   for (const ticket of rows(state.tickets)) {
     if (!projects.has(ticket.projectId) || ticket.status === 'resolved') continue;
-    if (!manager && ticket.authorId !== user.id) continue;
+    if (!hasPermission(user,'support.manage',state) && !hasPermission(user,'support.assign',state) && ticket.authorId !== user.id && ticket.assigneeId!==user.id) continue;
     add({ id: `ticket:${ticket.id}`, kind: 'ticket', title: ticket.priority === 'high' ? 'درخواست پشتیبانی با اولویت بالا' : 'درخواست پشتیبانی باز', detail: ticket.subject, projectId: ticket.projectId, href: '#support', date: rows(ticket.replies).at(-1)?.createdAt || ticket.createdAt });
+  }
+  for(const project of rows(state.projects))for(const task of rows(project.tasks)){
+    if(task.archivedAt||!task.sourceTicketId||task.assigneeId!==user.id||task.status==='done')continue;
+    add({id:`support-task:${task.id}`,kind:'ticket',title:'وظیفهٔ پشتیبانی ارجاع‌شده به شما',detail:task.title,projectId:project.id,href:'#reports',date:task.updatedAt||task.createdAt||task.dueDate});
   }
   for (const invoice of rows(state.invoices)) {
     if (!['manager', 'customer'].includes(user.role) || !projects.has(invoice.projectId) || Number(invoice.amount) <= Number(invoice.paid || 0)) continue;

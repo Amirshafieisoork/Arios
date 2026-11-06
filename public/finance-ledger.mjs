@@ -1,3 +1,4 @@
+import {hasPermission,requirePermission} from './permissions.mjs';
 /** Append-only, whole-toman cash and employee ledger. Funding is never counted as an expense. */
 export const FINANCE_TYPES = Object.freeze({advance:'پرداخت مساعده',advance_repayment:'برگشت مساعده',payroll_payment:'پرداخت و تسویهٔ حقوق',petty_issue:'تحویل تنخواه',petty_expense:'هزینه از تنخواه',petty_return:'برگشت تنخواه',expense:'هزینهٔ مستقیم',reversal:'برگشت سند'});
 const staff=new Set(['manager','accountant','worker','warehouse']);
@@ -48,7 +49,8 @@ function safeEntry(state,row){const result=select(row);if(row.type!=='reversal')
 /** Mutates a cloned domain draft. The caller commits it atomically with the audit record. */
 export function applyFinanceAction(state,actor,action,payload={}){
   if(!payload||typeof payload!=='object'||Array.isArray(payload))fail('ورودی عملیات مالی معتبر نیست.');
-  const user=actorFor(state,actor);if(!['manager','accountant'].includes(user.role))fail('ثبت مالی فقط برای مدیر و حسابدار مجاز است.',403,'FORBIDDEN');
+  const user=actorFor(state,actor);requirePermission(user,'finance.manage',state);requirePermission(user,'finance.view',state);requirePermission(user,'projects.prices',state);
+  if(action==='finance.entry.reverse')requirePermission(user,'finance.reverse',state);
   if(state.financeEntries===undefined)state.financeEntries=[];
   if(!Array.isArray(state.financeEntries))fail('ساختار اسناد مالی معتبر نیست.',500,'INVALID_STATE');
   const types={'finance.advance.create':'advance','finance.advance.repay':'advance_repayment','finance.payroll.pay':'payroll_payment','finance.petty.issue':'petty_issue','finance.petty.expense':'petty_expense','finance.petty.return':'petty_return','finance.expense.create':'expense'};
@@ -57,8 +59,12 @@ export function applyFinanceAction(state,actor,action,payload={}){
   if(rid){const old=state.financeEntries.find(row=>row.recordedBy===user.id&&row.requestId===rid);if(old){if(old.requestFingerprint!==fingerprint)fail('شناسهٔ درخواست قبلاً برای سند دیگری استفاده شده است.',409,'IDEMPOTENCY_CONFLICT');return safeEntry(state,old);}}
   const at=new Date().toISOString(),entry={id:'fin_'+crypto.randomUUID(),type:types[action],date:date(payload.date),version:1,recordedBy:user.id,createdAt:at,...(rid?{requestId:rid,requestFingerprint:fingerprint}:{})};
   if(action==='finance.entry.reverse'){
-    if(user.role!=='manager')fail('برگشت سند فقط برای مدیر مجاز است.',403,'FORBIDDEN');
+    requirePermission(user,'finance.manage',state);
     const original=state.financeEntries.find(row=>row.id===payload.id);if(!original)fail('سند مالی یافت نشد.',404,'NOT_FOUND');
+    if(original.projectId&&!['manager','accountant'].includes(user.role)){
+      const project=rows(state.projects).find(row=>row.id===original.projectId);
+      if(!project||(!(project.memberIds||[]).includes(user.id)&&project.createdBy!==user.id))fail('به اطلاعات مالی این پروژه دسترسی ندارید.',403,'FORBIDDEN');
+    }
     if(payload.version!==original.version)fail('نسخهٔ سند تغییر کرده است؛ صفحه را تازه کنید.',409,'VERSION_CONFLICT');
     if(original.type==='reversal'||state.financeEntries.some(row=>row.type==='reversal'&&row.reverseOf===original.id))fail('این سند قبلاً برگشت خورده است.',409,'ENTRY_REVERSED');
     if(entry.date<original.date)fail('تاریخ برگشت نباید پیش از سند اصلی باشد.');
@@ -75,6 +81,7 @@ export function applyFinanceAction(state,actor,action,payload={}){
     }
     if(entry.type.startsWith('petty_')||payload.projectId){
       entry.projectId=text(payload.projectId,'پروژه',120);const project=rows(state.projects).find(row=>row.id===entry.projectId);
+      if(project&&!['manager','accountant'].includes(user.role)&&!(project.memberIds||[]).includes(user.id)&&project.createdBy!==user.id)fail('به اطلاعات مالی این پروژه دسترسی ندارید.',403,'FORBIDDEN');
       if(!project||(project.archivedAt&&!['petty_expense','petty_return'].includes(entry.type)))fail('پروژهٔ معتبر و فعال را انتخاب کنید.',409,'PROJECT_ARCHIVED');
     }
     if(['petty_expense','expense'].includes(entry.type))entry.category=text(payload.category||'سایر','دستهٔ هزینه',100);
@@ -93,7 +100,7 @@ export function applyFinanceAction(state,actor,action,payload={}){
 function materialCost(state,projectId){let total=0;for(const row of rows(state.materials).filter(row=>!row.archivedAt&&row.projectId===projectId)){const milli=Math.round(row.quantity*1000);if(!Number.isSafeInteger(milli)||milli<0)fail('مقدار هزینهٔ مصالح معتبر نیست.',500,'INVALID_STATE');const amount=(BigInt(money(row.unitPrice,'بهای واحد',true))*BigInt(milli)+500n)/1000n;if(amount>BigInt(Number.MAX_SAFE_INTEGER))fail('هزینه از محدودهٔ مجاز بیشتر است.',409,'FINANCE_OVERFLOW');total=checked(total+Number(amount));}return total;}
 export function employeeFinanceSnapshot(state,actor){
   const user=rows(state.users).find(row=>row.id===actor?.id&&!row.deletedAt&&row.role===actor.role);if(!user||!staff.has(user.role))return {entries:[],accounts:[],pettyAccounts:[],projectAccounts:[],summary:{}};
-  const all=['manager','accountant'].includes(user.role),allowed=row=>all||row.employeeId===user.id;
+  const all=hasPermission(user,'finance.view',state)&&hasPermission(user,'projects.prices',state),allowed=row=>all||row.employeeId===user.id;
   const payrollRow=row=>row.type==='payroll_payment'||row.reversingType==='payroll_payment';
   const entries=rows(state.financeEntries).filter(row=>allowed(row)&&(all||!payrollRow(row))).map(row=>safeEntry(state,row)),active=activeFinanceEntries(state).filter(allowed);
   const ids=new Set([...rows(state.users).filter(row=>staff.has(row.role)&&(all||row.id===user.id)).map(row=>row.id),...active.map(row=>row.employeeId).filter(Boolean)]);
@@ -101,7 +108,7 @@ export function employeeFinanceSnapshot(state,actor){
   const accounts=all?fullAccounts:fullAccounts.map(row=>Object.fromEntries(['employeeId','advanceIssued','advanceRepaid','advanceBalance'].map(key=>[key,row[key]])));
   const pools=new Map();for(const row of active.filter(row=>row.type.startsWith('petty_')))pools.set(JSON.stringify([row.employeeId,row.projectId]),row);
   const pettyAccounts=[...pools.values()].map(row=>pettyAccount(state,row.employeeId,row.projectId));
-  const projectAccounts=all?rows(state.projects).map(project=>{const laborCost=sum(rows(state.reports).filter(row=>!row.archivedAt&&row.status==='approved'&&row.projectId===project.id),'laborCost'),materials=materialCost(state,project.id),pettyExpenses=sum(active.filter(row=>row.type==='petty_expense'&&row.projectId===project.id)),directExpenses=sum(active.filter(row=>row.type==='expense'&&row.projectId===project.id)),invoices=rows(state.invoices).filter(row=>!row.archivedAt&&row.projectId===project.id),invoiced=sum(invoices),received=sum(invoices,'paid');return {projectId:project.id,laborCost,materialCost:materials,pettyExpenses,directExpenses,totalCost:checked(laborCost+materials+pettyExpenses+directExpenses),invoiced,received,receivable:checked(invoiced-received)};}):[];
+  const projectAccounts=all?rows(state.projects).filter(project=>['manager','accountant'].includes(user.role)||(project.memberIds||[]).includes(user.id)||project.createdBy===user.id).map(project=>{const laborCost=sum(rows(state.reports).filter(row=>!row.archivedAt&&row.status==='approved'&&row.projectId===project.id),'laborCost'),materials=materialCost(state,project.id),pettyExpenses=sum(active.filter(row=>row.type==='petty_expense'&&row.projectId===project.id)),directExpenses=sum(active.filter(row=>row.type==='expense'&&row.projectId===project.id)),invoices=rows(state.invoices).filter(row=>!row.archivedAt&&row.projectId===project.id),invoiced=sum(invoices),received=sum(invoices,'paid');return {projectId:project.id,laborCost,materialCost:materials,pettyExpenses,directExpenses,totalCost:checked(laborCost+materials+pettyExpenses+directExpenses),invoiced,received,receivable:checked(invoiced-received)};}):[];
   if(!all)return {entries,accounts,pettyAccounts,projectAccounts:[],summary:{advanceBalance:sum(fullAccounts,'advanceBalance'),pettyBalance:sum(pettyAccounts,'balance')}};
   const directExpenses=sum(active.filter(row=>row.type==='expense')),pettySpent=sum(pettyAccounts,'spent');
   const cashOut=sum(active.filter(row=>['advance','payroll_payment','petty_issue','expense'].includes(row.type))),clientReceipts=sum(rows(state.receipts).filter(row=>!row.archivedAt)),stockRecoveries=sum(rows(state.personalStockSettlements).filter(row=>!row.archivedAt&&['cash','bank'].includes(row.method))),cashIn=checked(sum(active.filter(row=>['advance_repayment','petty_return'].includes(row.type)))+clientReceipts+stockRecoveries);

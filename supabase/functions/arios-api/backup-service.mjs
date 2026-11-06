@@ -1,3 +1,4 @@
+import {requireFullBackupAccess} from './permissions.mjs';
 /** Weekly encrypted application + object bytes + pinned source backup.
  * Invoked ONLY after the existing scheduler signature has been verified, or by
  * an authenticated manager. Telegram receives ciphertext, never provider keys.
@@ -194,7 +195,7 @@ export async function runWeeklyBackup({repo,supabase,fetcher=fetch,at=Date.now()
 }
 
 export async function backupStatus({repo,user}) {
-  manager(user);const config=object(await repo.getSetting(CONFIG)),key=object(await repo.getSetting(KEY)),ids=(await repo.getSetting(INDEX))||[],jobs=[];
+  requireFullBackupAccess(user);manager(user);const config=object(await repo.getSetting(CONFIG)),key=object(await repo.getSetting(KEY)),ids=(await repo.getSetting(INDEX))||[],jobs=[];
   for(const id of ids.slice(0,12))if(idOK(id)){const job=await repo.getSetting(jobKey(id));if(job)jobs.push({id:job.id,week:job.week,createdAt:job.createdAt,status:job.status,errorCode:job.errorCode||null,sentAt:job.sentAt||null,sourceRef:job.sourceRef,parts:job.parts?.length||0,sent:job.parts?.filter(p=>p.delivery?.status==='sent').length||0,files:job.parts?.map(p=>({id:p.id,file:p.file}))||[]});}
   let linked=false;try{await privateRecipient(repo,{targetUserId:config.targetUserId||user.id});linked=true;}catch{}
   return {enabled:config.enabled===true,targetIsYou:config.targetUserId===user.id,linked,schedule:'شنبه‌ها ساعت ۲۱:۱۵',timezone:'Asia/Tehran',retentionWeeks:8,retentionBytes:RETENTION_BYTES,keyReady:Boolean(key.keyId),keyId:key.keyId||null,recoveryKeySavedAt:config.recoveryKeySavedAt||null,sourcePinned:/^[a-f0-9]{40}$/.test(config.sourceRef||''),jobs,lastError:await repo.getSetting('backup_last_error'),excludesAuthCredentials:true};
@@ -202,7 +203,7 @@ export async function backupStatus({repo,user}) {
 
 export async function handleBackups({repo,supabase,user,request,path,readJSON,json,fetcher=fetch,at=Date.now()}) {
   if(!path.startsWith('/api/backups'))return null;
-  manager(user);
+  requireFullBackupAccess(user);manager(user);
   if(path==='/api/backups'&&request.method==='GET')return json(await backupStatus({repo,user}));
   if(path==='/api/backups/settings'&&request.method==='POST'){
     const payload=await readJSON(request,1024);if(typeof payload.enabled!=='boolean')fail('وضعیت بک‌آپ معتبر نیست.');

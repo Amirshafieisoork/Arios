@@ -34,7 +34,9 @@ test('worker inventory shows assigned consumption and safe stock, with no prices
   assert(!html.includes('کمپین رسانه‌ای یارا'));
   assert(!html.includes('name="unitPrice"'));
   assert.match(renderInventoryWorkspace(publicState(seed, 'customer'), context()), /برای نقش شما در دسترس نیست/);
-  assert.match(renderInventoryWorkspace(publicState(seed, 'accountant'), context()), /برای نقش شما در دسترس نیست/);
+  const accountingStock = renderInventoryWorkspace(publicState(seed, 'accountant'), context());
+  assert.match(accountingStock, /data-inventory-stock/);
+  for (const action of ['create','edit','receive','delete']) assert(!accountingStock.includes(`data-inventory-action="${action}"`));
 });
 
 test('scoped project view cannot fall through to another project or global stock', () => {

@@ -23,10 +23,12 @@ export function tehranReminderWindow(at = Date.now()) {
 const staffRoles = new Set(['manager', 'worker', 'warehouse', 'accountant']);
 function reminderCoverage(state, links, targetDate) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) throw new TypeError('Invalid target date');
-  const users = Array.isArray(state?.users) ? state.users : [], projects = Array.isArray(state?.projects) ? state.projects : [];
+  const users = Array.isArray(state?.users) ? state.users : [], projects = Array.isArray(state?.projects) ? state.projects : [], tickets = Array.isArray(state?.tickets) ? state.tickets : [];
   const linked = new Map((Array.isArray(links) ? links : []).filter(link => /^\d{1,20}$/.test(String(link.chat_id)) && String(link.chat_id) === String(link.telegram_user_id)).map(link => [link.user_id, link]));
   return users.filter(user => staffRoles.has(user.role) && !user.deletedAt).map(user => {
-    const tasks = projects.filter(project => !project.archivedAt && project.status !== 'completed' && (user.role === 'manager' || (project.memberIds || []).includes(user.id))).flatMap(project => (project.tasks || []).filter(task => !task.archivedAt && task.assigneeId === user.id && task.dueDate === targetDate && ['open', 'in_progress'].includes(task.status)).map(task => ({ project, task })));
+    const tasks = projects.filter(project => !project.archivedAt && project.status !== 'completed' && (user.role === 'manager' || (project.memberIds || []).includes(user.id))).flatMap(project => (project.tasks || []).filter(task => !task.archivedAt && task.assigneeId === user.id && task.dueDate === targetDate && ['open', 'in_progress'].includes(task.status)
+      && (!task.sourceTicketId || tickets.some(ticket => ticket.id === task.sourceTicketId && ticket.projectId === project.id && ticket.taskId === task.id && !ticket.archivedAt && ticket.approvalStatus === 'approved' && ticket.status !== 'resolved' && ticket.assigneeId === user.id && ticket.dueDate === task.dueDate)))
+      .map(task => ({ project, task })));
     return {user, tasks, link: linked.get(user.id)};
   });
 }

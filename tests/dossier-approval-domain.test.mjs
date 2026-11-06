@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createSeedState,applyAction,publicState,projectAccess,projectReadAccess,projectReviewerAccess,readDossierSubmission,PROJECT_APPROVAL_LABELS} from '../public/domain.mjs';
+import {configureReportProjects,approveReport} from './helpers/report-approval.mjs';
 const chain=ids=>PROJECT_APPROVAL_LABELS.map((label,index)=>({label,userId:ids[index]}));
 function fixture() {
   const state=createSeedState();
@@ -118,8 +119,11 @@ test('former frozen reviewer sees only assigned prior evidence and cannot inspec
   const ordinary=publicState(state,'worker');assert.equal(ordinary.projects[0].dossierSubmission,undefined);assert.deepEqual(ordinary.projects[0].dossierSubmissionHistory,[]);assert(ordinary.reports.every(report=>report.workerId==='worker'));
 });
 
-test('legacy projects retain original daily review behavior and domain/workflow browser and Edge mirrors agree',async()=>{
-  const state=createSeedState();assert.equal(state.projects[0].projectCode,undefined);applyAction(state,'manager','report.review',{id:'r2',status:'approved'});assert.equal(state.reports.find(report=>report.id==='r2').laborCost,520000);
+test('legacy daily reports require a configured chain and all six approvals; browser and Edge mirrors agree',async()=>{
+  const state=createSeedState();assert.equal(state.projects[0].projectCode,undefined);
+  const before=structuredClone(state),pending=state.reports.find(report=>report.id==='r2');
+  assert.throws(()=>applyAction(state,'manager','report.review',{id:'r2',version:pending.version,status:'approved'}),error=>error.code==='PROJECT_APPROVAL_NOT_CONFIGURED');
+  assert.deepEqual(state,before);configureReportProjects(state);approveReport(state,'r2');assert.equal(state.reports.find(report=>report.id==='r2').laborCost,520000);
   for(const name of ['domain.mjs','approval-workflow.mjs'])assert.equal(await readFile(new URL('../public/'+name,import.meta.url),'utf8'),await readFile(new URL('../supabase/functions/arios-api/'+name,import.meta.url),'utf8'));
 });
 

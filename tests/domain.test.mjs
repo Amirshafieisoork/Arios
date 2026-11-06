@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSeedState, publicState, applyAction, projectAccess, PROJECT_APPROVAL_LABELS, DomainError } from '../public/domain.mjs';
 
+import {reportSeed,reviewReportStep,advanceReportToFinal,approveReport} from './helpers/report-approval.mjs';
+
 const reportPayload = overrides => ({ projectId: 'p1', workerId: 'worker', date: '2026-10-18', start: '08:00', end: '14:00', breakMinutes: 30, description: 'نصب و تست دوربین', output: 'چهار دوربین نصب شد', ...overrides });
 const materialPayload = overrides => ({ projectId: 'p1', name: 'کابل شبکه', quantity: 1.125, unit: 'متر', unitPrice: 28000, clientVisible: true, date: '2026-10-18', inventoryId: 'inv2', ...overrides });
 function unchangedOnError(state, operation, expected) {
@@ -79,14 +81,14 @@ test('cross-project writes fail atomically for customers and workers', () => {
 });
 
 test('08:00–14:00 minus thirty minutes is 330 minutes and approval costs exactly 825000 toman', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   const result = applyAction(state, 'worker', 'report.create', reportPayload());
   assert.equal(result.minutes, 330);
   assert.equal(result.rate, undefined, 'action result must not reveal the worker rate');
   const report = state.reports.find(report => report.id === result.id);
   assert.equal(report.rate, 150000);
   assert.equal(report.laborCost, 0);
-  const reviewed = applyAction(state, 'manager', 'report.review', { id: report.id, status: 'approved' });
+  const reviewed = approveReport(state, report.id);
   assert.equal(reviewed.laborCost, 825000);
   assert.equal(publicState(state, 'manager').projects.find(project => project.id === 'p1').laborCost, 1650000);
 });
@@ -114,43 +116,44 @@ test('historical rate chosen by work date; captured rates do not change after fu
 });
 
 test('rate money must be an integer; worker without history uses the configured hourly fallback', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   const worker = state.users.find(user => user.id === 'worker');
   worker.rateHistory = [];
   worker.hourlyRate = 120001;
   const result = applyAction(state, 'manager', 'report.create', reportPayload({ start: '08:00', end: '08:01', breakMinutes: 0 }));
   assert.equal(result.rate, 120001);
-  const reviewed = applyAction(state, 'manager', 'report.review', { id: result.id, status: 'approved' });
+  const reviewed = approveReport(state, result.id);
   assert.equal(reviewed.laborCost, 2000, 'whole toman rounding is exact');
   unchangedOnError(state, () => applyAction(state, 'manager', 'worker.rate', { id: 'worker', hourlyRate: 100.1, effectiveDate: '2026-10-20' }));
 });
 
 test('approval rejects same worker time overlap across different projects; touching boundaries are accepted', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   const first = applyAction(state, 'manager', 'report.create', reportPayload());
-  applyAction(state, 'manager', 'report.review', { id: first.id, status: 'approved' });
+  approveReport(state, first.id);
   const second = applyAction(state, 'manager', 'report.create', reportPayload({ projectId: 'p3', start: '13:30', end: '15:00', breakMinutes: 0 }));
-  unchangedOnError(state, () => applyAction(state, 'manager', 'report.review', { id: second.id, status: 'approved' }), error => error.code === 'TIME_OVERLAP');
+  advanceReportToFinal(state, second.id);
+  unchangedOnError(state, () => reviewReportStep(state, second.id), error => error.code === 'TIME_OVERLAP');
   const third = applyAction(state, 'manager', 'report.create', reportPayload({ projectId: 'p3', start: '14:00', end: '15:00', breakMinutes: 0 }));
-  applyAction(state, 'manager', 'report.review', { id: third.id, status: 'approved' });
+  approveReport(state, third.id);
   assert.equal(state.reports.find(report => report.id === third.id).laborCost, 150000);
 });
 
-test('repeated approval is idempotent, and approved records cannot be reopened or have review note overwritten', () => {
-  const state = createSeedState();
+test('a completed approval chain rejects repeated decisions and cannot reopen or overwrite its final review', () => {
+  const state = reportSeed();
   const result = applyAction(state, 'manager', 'report.create', reportPayload());
-  applyAction(state, 'manager', 'report.review', { id: result.id, status: 'approved', reviewNote: 'verified' });
+  approveReport(state, result.id, 'verified');
   const before = structuredClone(state);
-  applyAction(state, 'manager', 'report.review', { id: result.id, status: 'approved', reviewNote: 'overwrite' });
+  unchangedOnError(state, () => reviewReportStep(state, result.id, 'approved', 'overwrite'), error => error.code === 'IMMUTABLE_REPORT');
   assert.deepEqual(state, before);
-  unchangedOnError(state, () => applyAction(state, 'manager', 'report.review', { id: result.id, status: 'rejected' }), error => error.code === 'IMMUTABLE_REPORT');
+  unchangedOnError(state, () => reviewReportStep(state, result.id, 'rejected', 'late change'), error => error.code === 'IMMUTABLE_REPORT');
 });
 
-test('changes requested and rejection keep zero labor cost; review requires manager', () => {
-  const state = createSeedState();
+test('changes requested and rejection keep zero labor cost; review requires the current assigned reviewer', () => {
+  const state = reportSeed();
   const result = applyAction(state, 'worker', 'report.create', reportPayload());
-  unchangedOnError(state, () => applyAction(state, 'worker', 'report.review', { id: result.id, status: 'approved' }), error => error.status === 403);
-  const review = applyAction(state, 'manager', 'report.review', { id: result.id, status: 'changes_requested', reviewNote: 'جزئیات لازم است' });
+  unchangedOnError(state, () => applyAction(state, 'worker', 'report.review', { id: result.id, version: state.reports.find(row=>row.id===result.id).version, status: 'approved' }), error => error.status === 403);
+  const review = reviewReportStep(state, result.id, 'changes_requested', 'جزئیات لازم است');
   assert.equal(review.laborCost, 0);
   assert.equal(review.reviewNote, 'جزئیات لازم است');
 });

@@ -104,7 +104,7 @@ test('role boundaries are canonical and financial projections never expose anoth
  for(const actor of ['worker','customer','warehouse'])unchanged(state,()=>action(state,'finance.advance.create',{},actor),'FORBIDDEN');
  unchanged(state,()=>action(state,'finance.entry.reverse',{id:state.financeEntries[0].id,version:1,reason:'اصلاح'},'accountant'),'FORBIDDEN');
  unchanged(state,()=>applyFinanceAction(state,{id:'worker',role:'manager'},'finance.advance.create',input()),'FORBIDDEN');
- const worker=publicState(state,'worker').employeeFinance;assert.equal(worker.accounts.length,1);assert.equal(worker.accounts[0].employeeId,'worker');assert.equal(worker.accounts[0].approvedWages,undefined);assert.equal(worker.accounts[0].grossPayable,undefined);assert(worker.entries.every(row=>row.employeeId==='worker'&&row.type!=='payroll_payment'));
+ const worker=publicState(state,'worker').employeeFinance;assert.equal(worker.accounts.length,1);assert.equal(worker.accounts[0].employeeId,'worker');assert.equal(worker.accounts[0].approvedWages,undefined);assert.equal(worker.accounts[0].grossPayable,undefined);assert.equal(worker.accounts[0].advanceBalance,undefined);assert(worker.entries.every(row=>row.employeeId==='worker'&&row.type!=='payroll_payment'&&row.amount===undefined));
  assert.equal(publicState(state,'customer').employeeFinance,undefined);assert.equal(publicState(state,'warehouse').employeeFinance.entries.length,0);
  state.financeEntries[0].secret='PRIVATE';assert.equal(view(state).entries[0].secret,undefined);const detached=view(state);detached.entries[0].amount=99;assert.equal(state.financeEntries[0].amount,300);
 });

@@ -51,6 +51,19 @@ test('warehouse price is read-only and worker personal view stays read-only and 
  assert(!renderOperations('finance',{...customer,personalStock:publicState(seed,'manager').personalStock},ctx()).includes('حساب برداشت شخصی'));
 });
 
+test('read-only issue price uses current stock price while delegated financial access can set a custom price',async t=>{
+ noDocument(t);const seed=fixture();let modal,lastPayload;
+ openPersonalStockIssue(publicState(seed,'warehouse'),ctx({modal:value=>modal=value,mutate:async(action,payload)=>{lastPayload=payload;return applyAction(seed,'warehouse',action,payload);}}),{employeeId:'worker',inventoryId:'inv2'});
+ const stock=seed.inventory.find(row=>row.id==='inv2'),oldPrice=stock.unitPrice;stock.unitPrice=oldPrice+1000;
+ await modal.onSubmit(form({employeeId:'worker',inventoryId:'inv2',quantity:'1',unitPrice:String(oldPrice),date:'2026-10-27',note:''}));
+ assert(!('unitPrice' in lastPayload));assert.equal(seed.personalStockIssues[0].unitPrice,stock.unitPrice);
+ const worker=seed.users.find(row=>row.id==='worker');worker.permissions={'inventory.view':true,'inventory.issue':true,'inventory.prices':true,'finance.manage':true};
+ openPersonalStockIssue(publicState(seed,'worker'),ctx({modal:value=>modal=value,mutate:async(action,payload)=>applyAction(seed,'worker',action,payload)}),{employeeId:'worker2',inventoryId:'inv2'});
+ assert.match(modal.body,/name="unitPrice"/);assert(!/name="unitPrice"[^>]*readonly/.test(modal.body));
+ await modal.onSubmit(form({employeeId:'worker2',inventoryId:'inv2',quantity:'1',unitPrice:'35000',date:'2026-10-27',note:''}));
+ assert.equal(seed.personalStockIssues[1].unitPrice,35000);
+});
+
 test('financial screen and team expose account actions while scoped project inventory does not mix personal charges',()=>{
  const seed=fixture();applyAction(seed,'manager','personalStock.issue',{employeeId:'worker',inventoryId:'inv2',quantity:1,date:'2026-10-27'});
  const manager=publicState(seed,'manager');assert.match(renderOperations('team',manager,ctx()),/ماندهٔ برداشت شخصی همکاران/);

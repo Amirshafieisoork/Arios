@@ -1,3 +1,4 @@
+import {requirePermission} from './permissions.mjs';
 import { APIError, manager, rate } from './auth.mjs';
 import { projectAccess, projectReadAccess, projectReviewerAccess } from './domain.mjs';
 
@@ -6,13 +7,14 @@ const MAX = 10 * 1024 * 1024;
 const TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf' };
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
 const safe = file => Object.fromEntries(['id','name','mimeType','size','uploadedBy','createdAt','clientVisible','reportId','archivedAt','archivedBy','updatedAt'].filter(key=>file[key]!==undefined).map(key=>[key,file[key]]));
-function authorized(state,user,projectId,write=false) {
+function authorized(state,user,projectId,write=false,manage=false) {
   const actor=state.users.find(person=>person.id===user.id&&!person.deletedAt);
   const project=state.projects.find(project=>project.id===projectId);
   if (project?.archivedAt && write && actor?.role==='manager') fail('برای بارگذاری فایل، ابتدا پروژهٔ حذف‌شده را بازیابی کنید.',409,'PROJECT_ARCHIVED');
   if (project?.archivedAt && actor?.role!=='manager') fail('به فایل‌های این پروژه دسترسی ندارید.',403,'FORBIDDEN');
+  requirePermission(actor,manage?'documents.manage':write?'documents.upload':'documents.view',state);
   const access=write?projectAccess:projectReadAccess;
-  if (!actor || actor.role!==user.role || !access(state,user.id,projectId) || (write && !['manager','worker'].includes(actor.role))) fail('به فایل‌های این پروژه دسترسی ندارید.',403,'FORBIDDEN');
+  if (!actor || actor.role!==user.role || !access(state,user.id,projectId)) fail('به فایل‌های این پروژه دسترسی ندارید.',403,'FORBIDDEN');
   return project;
 }
 const list=value=>Array.isArray(value)?value:[];
@@ -62,12 +64,12 @@ export async function handleProjectFiles({repo,supabase,user,request,path,readJS
   const loaded=await repo.loadState();
   if(!loaded)fail('فضای کار آماده نیست.',503,'STATE_NOT_INITIALIZED');
   if(manageOperation) {
-    manager(user);
+    requirePermission(loaded.state.users.find(person=>person.id===user.id),'documents.manage',loaded.state);
     await rate(repo,`project-files-manage:${user.id}`,30);
     const saved=await repo.mutateState(state=>{
-      const current=authorized(state,user,payload.projectId,true);
+      const current=authorized(state,user,payload.projectId,true,true);
       const actor=state.users.find(person=>person.id===user.id);
-      manager(actor);
+      requirePermission(actor,'documents.manage',state);
       const target=list(current.files).find(file=>file.id===payload.id);
       if(!target||target.status!=='ready')fail('فایل آماده یافت نشد.',404,'NOT_FOUND');
       if(manageOperation==='update') {

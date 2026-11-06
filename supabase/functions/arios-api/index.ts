@@ -1,3 +1,4 @@
+import {requirePermission,requireFullBackupAccess,assertActionPermission,redactActionResult} from './permissions.mjs';
 import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
 import { applyAction, readDossierSubmission } from './domain.mjs';
 import { createRepository } from './repository.mjs';
@@ -120,6 +121,11 @@ export function createHandler(options: any = {}) {
       // The first-login restriction is checked before every private business
       // handler, including files, voice, backups and side-effecting actions.
       if (user.passwordChangeRequired) fail('برای ورود به پنل، ابتدا رمز اولیهٔ خود را تغییر دهید.',403,'PASSWORD_CHANGE_REQUIRED');
+      if(path.startsWith('/api/backups'))requireFullBackupAccess(user,state);
+      if(path.startsWith('/api/reminders'))requirePermission(user,'tasks.manage',state);
+      if(path.startsWith('/api/leads'))requirePermission(user,'people.manage',state);
+      if(path==='/api/password-reset/requests')requirePermission(user,'people.manage',state);
+      if(path.startsWith('/api/integrations'))requirePermission(user,'integrations.manage',state);
       const backups = await handleBackups({ repo, supabase: client, user, request, path, readJSON, json, fetcher });
       if (backups) return backups;
       const reminders = await handleReminders({ repo, user, request, path, fetcher, readJSON, json, env: options.env || {} });
@@ -138,6 +144,7 @@ export function createHandler(options: any = {}) {
       if (path === '/api/actions' && request.method === 'POST') {
         const payload = await readJSON(request);
         if (typeof payload.action !== 'string' || !payload.payload || typeof payload.payload !== 'object' || Array.isArray(payload.payload)) fail('عملیات معتبر نیست.');
+        assertActionPermission(user,payload.action,payload.payload,state);
         const result = payload.action === 'account.primary-manager.transfer'
           ? await transferPrimaryManager(client,repo,user,payload.payload)
           : payload.action === 'account.create'
@@ -153,7 +160,7 @@ export function createHandler(options: any = {}) {
           : payload.action === 'account.password.reset'
             ? await resetAccountPassword(client, repo, user, payload.payload)
           : await repo.mutateState((current: any) => applyAction(current, user.id, payload.action, payload.payload));
-        return json({ result: result.result, state: await workspaceState(repo, result.state, user.id) });
+        return json({ result: redactActionResult(result.result,payload.action,payload.payload,user,result.state), state: await workspaceState(repo, result.state, user.id) });
       }
       if (path === '/api/assistant' && request.method === 'POST') return json(await workspaceAssistant({ repo, user, payload: await readJSON(request), config: await getConfig(repo), fetcher }));
       if (path === '/api/integrations/test' && request.method === 'POST') {

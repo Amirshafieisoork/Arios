@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSeedState, publicState, applyAction, DomainError } from '../public/domain.mjs';
 
+import {reportSeed,reviewReportStep,approveReport} from './helpers/report-approval.mjs';
+
 const reportInput = overrides => ({ projectId: 'p1', workerId: 'worker', date: '2026-10-18', start: '08:00', end: '14:00', breakMinutes: 30, description: 'نصب و آزمایش دوربین', output: 'چهار دوربین آماده شد', ...overrides });
 const storedReport = (state, id) => state.reports.find(report => report.id === id);
 const createReport = state => applyAction(state, 'worker', 'report.create', reportInput());
@@ -13,9 +15,9 @@ function rejectsAtomically(state, action, expected = DomainError) {
 }
 
 test('an owner can correct a returned report and resubmit without creating another report or labor charge', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   const created = createReport(state);
-  applyAction(state, 'manager', 'report.review', { id: created.id, status: 'changes_requested', reviewNote: 'شرح تست کامل شود' });
+  reviewReportStep(state, created.id, 'changes_requested', 'شرح تست کامل شود');
   const count = state.reports.length;
   const previous = structuredClone(storedReport(state, created.id));
   const result = applyAction(state, 'worker', 'report.update', updateInput(previous, { end: '15:00', description: 'نصب و آزمایش تصویر و شبکه تکمیل شد' }));
@@ -38,14 +40,14 @@ test('an owner can correct a returned report and resubmit without creating anoth
 });
 
 test('optimistic report versions prevent stale saves and approval makes every revision immutable', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   const created = createReport(state);
   for (const version of [undefined, 0, 1.5, '1']) {
     rejectsAtomically(state, () => applyAction(state, 'worker', 'report.update', updateInput(created, { version })));
   }
   const saved = applyAction(state, 'worker', 'report.update', updateInput(created, { description: 'جزئیات تکمیل شد' }));
   rejectsAtomically(state, () => applyAction(state, 'worker', 'report.update', updateInput(created)), error => error.status === 409 && error.code === 'VERSION_CONFLICT');
-  applyAction(state, 'manager', 'report.review', { id: saved.id, status: 'approved' });
+  approveReport(state, saved.id);
   for (const actor of ['worker', 'manager']) {
     rejectsAtomically(state, () => applyAction(state, actor, 'report.update', updateInput(storedReport(state, saved.id))), error => error.status === 409 && error.code === 'IMMUTABLE_REPORT');
   }
@@ -53,9 +55,9 @@ test('optimistic report versions prevent stale saves and approval makes every re
 
 test('rejected and still-submitted reports can be corrected by their owner or manager', () => {
   for (const status of ['submitted', 'rejected']) {
-    const state = createSeedState();
+    const state = reportSeed();
     const created = createReport(state);
-    if (status === 'rejected') applyAction(state, 'manager', 'report.review', { id: created.id, status, reviewNote: 'اطلاعات اصلاح شود' });
+    if (status === 'rejected') reviewReportStep(state, created.id, status, 'اطلاعات اصلاح شود');
     const current = storedReport(state, created.id);
     const revised = applyAction(state, 'manager', 'report.update', updateInput(current, { output: 'آزمایش نهایی ثبت شد', status: 'approved', laborCost: 999999999, rate: 1 }));
     assert.equal(revised.status, 'submitted');
@@ -65,7 +67,7 @@ test('rejected and still-submitted reports can be corrected by their owner or ma
 });
 
 test('a report keeps its captured rate for the same work date and reselects the historical rate when its date changes', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   const created = createReport(state);
   applyAction(state, 'manager', 'worker.rate', { id: 'worker', hourlyRate: 190000, effectiveDate: '2026-10-10' });
   const sameDate = applyAction(state, 'manager', 'report.update', updateInput(created, { description: 'توضیح اصلاح شد' }));
@@ -76,7 +78,7 @@ test('a report keeps its captured rate for the same work date and reselects the 
 });
 
 test('report revisions enforce ownership, both project scopes, member identity and full work-field validation atomically', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   const created = createReport(state);
   for (const actor of ['worker2', 'customer']) {
     rejectsAtomically(state, () => applyAction(state, actor, 'report.update', updateInput(created)), error => error.status === 403);
@@ -96,7 +98,7 @@ test('report revisions enforce ownership, both project scopes, member identity a
 });
 
 test('manager assignment changes alter current scope without deleting reports or financial records', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   const created = createReport(state);
   const before = structuredClone({ reports: state.reports, materials: state.materials, invoices: state.invoices, receipts: state.receipts });
   const result = applyAction(state, 'manager', 'project.update', { id: 'p1', customerId: 'customer2', memberIds: ['worker3', 'worker3'] });
@@ -114,7 +116,7 @@ test('manager assignment changes alter current scope without deleting reports or
 });
 
 test('invalid project assignment updates and nonmanager attempts leave all existing scope unchanged', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   for (const overrides of [{ customerId: 'worker' }, { customerId: 'missing' }, { customerId: false }, { customerId: {} }, { memberIds: ['customer'] }, { memberIds: ['missing'] }, { memberIds: [1] }, { memberIds: 'worker' }]) {
     rejectsAtomically(state, () => applyAction(state, 'manager', 'project.update', { id: 'p1', progress: 99, ...overrides }));
   }
@@ -124,7 +126,7 @@ test('invalid project assignment updates and nonmanager attempts leave all exist
 });
 
 test('an empty production inventory supports new zero-stock products, receiving, and fractional stock', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   state.inventory = [];
   const created = applyAction(state, 'manager', 'inventory.create', { name: ' کابل فیبر ', unit: ' متر ', quantity: 0, minQuantity: 10.125, unitPrice: 15000 });
   assert.equal(created.name, 'کابل فیبر');
@@ -141,7 +143,7 @@ test('an empty production inventory supports new zero-stock products, receiving,
 });
 
 test('inventory creation rejects unauthorized users, invalid quantities and fractional money atomically', () => {
-  const state = createSeedState();
+  const state = reportSeed();
   const payload = { name: 'دوربین', unit: 'عدد', quantity: 0, minQuantity: 0, unitPrice: 3500000 };
   for (const actor of ['worker', 'customer']) {
     rejectsAtomically(state, () => applyAction(state, actor, 'inventory.create', payload), error => error.status === 403);

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyAction, createSeedState, publicState, projectAccess } from '../public/domain.mjs';
+import {configureReportProjects} from './helpers/report-approval.mjs';
 
 function fixture() {
   const state = createSeedState();
@@ -33,7 +34,7 @@ test('warehouse snapshot contains stock work context without customer contact, p
 });
 
 test('accountant can issue invoices and register receipts but cannot administer accounts, stock or operational messages', () => {
-  const state = fixture(), view = publicState(state, 'accountant');
+  const state = configureReportProjects(fixture()), view = publicState(state, 'accountant');
   assert.equal(view.projects.length, state.projects.length);
   assert.equal(view.projects[0].budget, state.projects[0].budget);
   assert.equal(view.reports.length, state.reports.length);
@@ -49,7 +50,7 @@ test('accountant can issue invoices and register receipts but cannot administer 
   for (const [action, payload] of [
     ['account.update', { id: 'worker', role: 'customer' }], ['account.archive', { id: 'worker' }],
     ['inventory.receive', { id: 'inv2', quantity: 1 }], ['material.consume', consume()],
-    ['report.review', { id: 'r2', status: 'approved' }], ['project.update', { id: 'p1', progress: 99 }],
+    ['report.review', { id: 'r2', version: state.reports.find(row=>row.id==='r2').version, status: 'approved' }], ['project.update', { id: 'p1', progress: 99 }],
     ['message.send', { projectId: 'p1', text: 'private' }], ['ticket.create', { projectId: 'p1', subject: 'test', description: 'test' }],
   ]) rejectsUnchanged(state, 'accountant', action, payload);
 });

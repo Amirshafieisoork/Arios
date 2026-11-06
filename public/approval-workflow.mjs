@@ -1,4 +1,5 @@
 import { DossierError, buildDossierSummary, safeDossierSubmission, dossierDate } from './dossier-model.mjs';
+import {hasPermission} from './permissions.mjs';
 
 const copy = value => structuredClone(value);
 const list = value => Array.isArray(value) ? value : [];
@@ -6,7 +7,7 @@ const fail = (message, status = 400, code = 'INVALID_DOSSIER') => { throw new Do
 const timestamp = () => new Date().toISOString();
 const key = () => crypto.randomUUID();
 const finance = user => ['manager','accountant'].includes(user.role);
-const reviewerRoles = ['manager','worker','accountant'];
+const reviewerRoles = ['manager','worker','accountant','warehouse'];
 const note = (value, required = false) => {
   if (value === undefined && !required) return '';
   if (typeof value !== 'string' || value.trim().length > 500 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value) || (required && !value.trim())) fail('یادداشت و دلیل بررسی باید حداکثر ۵۰۰ نویسه باشد.');
@@ -17,7 +18,7 @@ function version(actual, supplied) {
 }
 function activeReviewer(state, userId, stageIndex) {
   const user = state.users.find(person=>person.id === userId && !person.deletedAt);
-  if (!user || !(stageIndex === 0 ? ['manager','worker'] : reviewerRoles).includes(user.role)) fail('مسئول این مرحله باید حساب فعال و مجاز داشته باشد؛ مدیر مسئول را اصلاح کند.',409,'INACTIVE_REVIEWER');
+  if (!user || !(stageIndex === 0 ? ['manager','worker'] : reviewerRoles).includes(user.role) || !hasPermission(user,'reports.review',state)) fail('مسئول این مرحله باید حساب فعال و مجاز داشته باشد؛ مدیر مسئول را اصلاح کند.',409,'INACTIVE_REVIEWER');
   return user;
 }
 function configuredStages(state,project,labels) {
@@ -36,13 +37,15 @@ function entry(submission,user,action,details = {}) {
 }
 const snapshotBytes = snapshot => new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
 function response(project,user) {
-  return {id:project.id,projectId:project.id,dossierSubmission:safeDossierSubmission(project.dossierSubmission,finance(user))};
+  const financial=user.role!=='customer'&&hasPermission(user,'projects.prices')&&hasPermission(user,'finance.view');
+  return {id:project.id,projectId:project.id,dossierSubmission:safeDossierSubmission(project.dossierSubmission,financial)};
 }
 
 /** Mutates only the detached atomic state draft supplied by the domain. */
 export function applyDossierWorkflow(state,actor,action,payload,labels) {
   const user = state.users.find(person=>person.id===actor.id && !person.deletedAt);
   if (!user || !reviewerRoles.includes(user.role)) fail('این عملیات برای حساب شما مجاز نیست.',403,'FORBIDDEN');
+  if(action==='project.dossier.review'&&!hasPermission(user,'reports.review',state))fail('دسترسی تأیید گزارش برای این حساب فعال نیست.',403,'FORBIDDEN');
   const project = state.projects.find(project=>project.id===payload.projectId);
   if (!project) fail('پروژه یافت نشد.',404,'PROJECT_NOT_FOUND');
   const current = project.dossierSubmission;

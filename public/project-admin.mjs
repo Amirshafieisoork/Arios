@@ -1,4 +1,5 @@
 import {latinDigits} from './identity.mjs';
+import {hasPermission} from './permissions.mjs';
 
 export const PROJECT_APPROVAL_LABELS = Object.freeze(['مسئول پروژه','مسئول واحد','مدیر گروه فنی','واحد فروش','واحد مالی','مدیرعامل']);
 const normalCode = value => latinDigits(value ?? '').normalize('NFKC').trim().replace(/[\u200c\u200e\u200f]/g,'').toUpperCase();
@@ -11,9 +12,27 @@ export function projectLabel(project) {
 export function projectViewPermissions(project,user) {
   const role=user?.role, manager=role==='manager', customer=role==='customer';
   const reviewOnly=role==='accountant'||(role==='worker'&&project?.canRecordWork===false);
-  const canRecord=manager||(role==='worker'&&!reviewOnly);
-  const tabs={overview:'نمای کلی',...(!customer?{reports:'گزارش‌های کار',dossier:'گزارش تفصیلی'}:{}),...((manager||customer||role==='accountant')?{finance:'صورت‌حساب‌ها'}:{}),...(!reviewOnly?{materials:'تجهیزات مصرفی',...(canRecord?{tasks:'وظایف'}:{}),team:'نیروها',files:'فایل‌ها و تصاویر',messages:'گفت‌وگو',support:'پشتیبانی'}:{})};
-  return {reviewOnly,canRecord,tabs};
+  const canRecord=hasPermission(user,'reports.submit')&&(manager||(role==='worker'&&!reviewOnly));
+  const canViewPrices=hasPermission(user,'projects.prices'),canEdit=hasPermission(user,'projects.edit'),canArchive=hasPermission(user,'projects.archive');
+  const tabs={overview:'نمای کلی',...(!customer?{reports:'گزارش‌های کار',dossier:'گزارش تفصیلی'}:{}),...((hasPermission(user,'finance.view')&&canViewPrices)?{finance:'صورت‌حساب‌ها'}:{}),...(!reviewOnly?{materials:'تجهیزات مصرفی',...(canRecord||hasPermission(user,'tasks.manage')?{tasks:'وظایف'}:{}),team:'نیروها',...(hasPermission(user,'documents.view')?{files:'فایل‌ها و تصاویر'}:{}),messages:'گفت‌وگو',support:'پشتیبانی'}:{})};
+  return {reviewOnly,canRecord,canViewPrices,canEdit,canArchive,tabs};
+}
+
+/** Only visible financial inputs are submitted; a hidden amount is never reset to zero. */
+export function projectFinancialFields(project,ctx,user) {
+  if(!hasPermission(user,'projects.prices'))return '';
+  const amount=(name,label)=>`<label class="field"><span class="field-label">${label} (تومان)</span><input name="${name}" type="number" min="0" step="1" required value="${ctx.e(project?.[name]??0)}"></label>`;
+  return `<fieldset class="field full project-financial-fields"><legend>مبالغ پروژه</legend><div class="form-grid">${amount('budget','بودجهٔ داخلی')}${amount('contractAmount','مبلغ قرارداد')}</div><p class="muted">اصلاح این مبالغ، رسیدهای پرداخت و نسخه‌های قبلاً تأییدشدهٔ گزارش را تغییر نمی‌دهد.</p></fieldset>`;
+}
+export function projectFinancialPayload(form,user) {
+  if(!hasPermission(user,'projects.prices'))return {};
+  const result={};
+  for(const key of ['budget','contractAmount'])if(form.has(key)){
+    const raw=latinDigits(String(form.get(key)??'')).trim(),value=Number(raw);
+    if(!/^\d+$/.test(raw)||!Number.isSafeInteger(value)||value<0)throw Error('مبلغ پروژه باید عدد صحیح نامنفی به تومان باشد.');
+    result[key]=value;
+  }
+  return result;
 }
 
 export function projectMatchesQuery(project,query,users=[]) {

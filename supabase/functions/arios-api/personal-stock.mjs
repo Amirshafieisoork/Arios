@@ -1,3 +1,4 @@
+import {hasPermission,requirePermission} from './permissions.mjs';
 import { employeeFinanceAccount } from './finance-ledger.mjs';
 /** Personal inventory charges are a separate employee ledger; project wages and signed reports stay immutable. */
 const rows=value=>Array.isArray(value)?value:[];
@@ -34,20 +35,20 @@ export function applyPersonalStockAction(state,actor,action,payload={}){
   if(!Array.isArray(state.personalStockIssues)||!Array.isArray(state.personalStockSettlements))fail('ساختار حساب همکاران معتبر نیست.',500,'INVALID_STATE');
   const at=new Date().toISOString(),rid=requestId(payload.requestId);
   if(action==='personalStock.issue'){
-    allow(user,['manager','warehouse']);
+    requirePermission(user,'inventory.issue',state);if(!['manager','warehouse'].includes(user.role)&&!hasPermission(user,'inventory.view',state))fail('ثبت برداشت شخصی نیازمند دسترسی انبار است.',403,'FORBIDDEN');
     const employeeId=text(payload.employeeId,'همکار',120),inventoryId=text(payload.inventoryId,'کالای انبار',120),milli=quantity(payload.quantity),issuedDate=date(payload.date),note=text(payload.note,'توضیح',1000,true);
     const fingerprint=JSON.stringify({employeeId,inventoryId,quantity:milli,date:issuedDate,note,unitPrice:payload.unitPrice??null});
     const old=replay(state.personalStockIssues,user,rid,fingerprint,safeIssue);if(old)return old;
     const employee=find(rows(state.users),employeeId,'همکار');if(employee.deletedAt||!staffRoles.has(employee.role))fail('همکار باید حساب فعال سازمانی داشته باشد.');
     const stock=find(rows(state.inventory),inventoryId,'کالای انبار');if(stock.archivedAt)fail('کالای حذف‌شده را پیش از برداشت بازیابی کنید.',409,'STOCK_ARCHIVED');
     const unitPrice=money(payload.unitPrice??stock.unitPrice,'بهای واحد',true);
-    if(user.role!=='manager'&&unitPrice!==stock.unitPrice)fail('تغییر بهای برداشت شخصی فقط برای مدیر مجاز است.',403,'PRICE_OVERRIDE_FORBIDDEN');
+    if(unitPrice!==stock.unitPrice&&(!hasPermission(user,'inventory.prices',state)||!hasPermission(user,'finance.manage',state)))fail('تغییر بهای برداشت شخصی نیازمند دسترسی اصلاح اسناد مالی است.',403,'PRICE_OVERRIDE_FORBIDDEN');
     const amount=exactAmount(unitPrice,milli);
     const issue={id:'psi_'+crypto.randomUUID(),employeeId,inventoryId,name:stock.name,unit:stock.unit,unitPrice,quantity:milli/1000,returnedQuantity:0,netQuantity:milli/1000,amount,date:issuedDate,note,version:1,createdAt:at,recordedBy:user.id,returns:[],...(rid?{requestId:rid,requestFingerprint:fingerprint}:{})};
     stockChange(stock,-milli);state.personalStockIssues.push(issue);checkedAccount(state,employeeId);return safeIssue(issue);
   }
   if(action==='personalStock.settle'){
-    allow(user,['manager','accountant']);
+    requirePermission(user,'finance.manage',state);requirePermission(user,'finance.view',state);requirePermission(user,'projects.prices',state);
     const employeeId=text(payload.employeeId,'همکار',120),amount=money(payload.amount),settledDate=date(payload.date),reference=text(payload.reference,'شناسهٔ تسویه',120),note=text(payload.note,'توضیح',1000,true),method=payload.method;
     if(!['payroll','cash','bank'].includes(method))fail('روش تسویه معتبر نیست.');
     const fingerprint=JSON.stringify({employeeId,amount,date:settledDate,reference,note,method});
@@ -59,7 +60,7 @@ export function applyPersonalStockAction(state,actor,action,payload={}){
     const settlement={id:'pss_'+crypto.randomUUID(),employeeId,amount,method,date:settledDate,reference,note,version:1,createdAt:at,recordedBy:user.id,...(rid?{requestId:rid,requestFingerprint:fingerprint}:{})};state.personalStockSettlements.push(settlement);checkedAccount(state,employeeId);return safeSettlement(settlement);
   }
   if(action==='personalStock.return'){
-    allow(user,['manager','warehouse']);const issue=find(state.personalStockIssues,payload.id,'برداشت شخصی'),milli=quantity(payload.quantity),returnedDate=date(payload.date),note=text(payload.note,'توضیح برگشت',1000,true);
+    requirePermission(user,'inventory.issue',state);if(!['manager','warehouse'].includes(user.role)&&!hasPermission(user,'inventory.view',state))fail('ثبت برداشت شخصی نیازمند دسترسی انبار است.',403,'FORBIDDEN');const issue=find(state.personalStockIssues,payload.id,'برداشت شخصی'),milli=quantity(payload.quantity),returnedDate=date(payload.date),note=text(payload.note,'توضیح برگشت',1000,true);
     const fingerprint=JSON.stringify({id:issue.id,quantity:milli,date:returnedDate,note,version:payload.version});
     const old=replay(rows(issue.returns),user,rid,fingerprint,entry=>safeIssue(issue));if(old)return old;
     if(issue.archivedAt)fail('ابتدا برداشت حذف‌شده را بازیابی کنید.',409,'RECORD_ARCHIVED');version(issue,payload.version);
@@ -72,7 +73,7 @@ export function applyPersonalStockAction(state,actor,action,payload={}){
   }
   const settlementAction=action.startsWith('personalStock.settlement.');
   if(['personalStock.archive','personalStock.restore','personalStock.settlement.archive','personalStock.settlement.restore'].includes(action)){
-    allow(user,['manager']);const collection=settlementAction?state.personalStockSettlements:state.personalStockIssues,row=find(collection,payload.id,settlementAction?'تسویه':'برداشت شخصی'),restore=action.endsWith('.restore'),reason=text(payload.reason,'دلیل اصلاح',1000);
+    requirePermission(user,settlementAction?'finance.manage':'inventory.archive',state);if(!settlementAction&&!['manager','warehouse'].includes(user.role)&&!hasPermission(user,'inventory.view',state))fail('ویرایش برداشت شخصی نیازمند دسترسی انبار است.',403,'FORBIDDEN');const collection=settlementAction?state.personalStockSettlements:state.personalStockIssues,row=find(collection,payload.id,settlementAction?'تسویه':'برداشت شخصی'),restore=action.endsWith('.restore'),reason=text(payload.reason,'دلیل اصلاح',1000);
     if(restore?!row.archivedAt:Boolean(row.archivedAt))return settlementAction?safeSettlement(row):safeIssue(row);
     version(row,payload.version);
     if(!settlementAction){const stock=stockFor(state,row,{active:restore});stockChange(stock,(restore?-1:1)*quantity(row.netQuantity,'ماندهٔ برداشت',true));}
@@ -87,7 +88,7 @@ export function applyPersonalStockAction(state,actor,action,payload={}){
 export function personalStockSnapshot(state,actor){
   const user=rows(state.users).find(row=>row.id===actor?.id&&!row.deletedAt&&row.role===actor.role);
   if(!user||!staffRoles.has(user.role))return {issues:[],settlements:[],accounts:[]};
-  const all=['manager','accountant','warehouse'].includes(user.role),financial=['manager','accountant'].includes(user.role),allowed=id=>all||id===user.id;
+  const all=hasPermission(user,'inventory.view',state)||hasPermission(user,'finance.view',state),financial=hasPermission(user,'finance.view',state)&&hasPermission(user,'projects.prices',state),allowed=id=>all||id===user.id;
   const issues=rows(state.personalStockIssues).filter(row=>allowed(row.employeeId)),settlements=rows(state.personalStockSettlements).filter(row=>allowed(row.employeeId));
   const employeeIds=new Set([...rows(state.users).filter(row=>staffRoles.has(row.role)&&(all||row.id===user.id)).map(row=>row.id),...issues.map(row=>row.employeeId),...settlements.map(row=>row.employeeId)]);
   return {issues:issues.map(safeIssue),settlements:user.role==='warehouse'?[]:settlements.map(safeSettlement),accounts:[...employeeIds].map(employeeId=>financial?checkedAccount(state,employeeId):balanceFor(state,employeeId))};

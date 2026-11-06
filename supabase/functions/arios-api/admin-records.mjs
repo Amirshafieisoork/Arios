@@ -1,18 +1,21 @@
 /** Manager maintenance keeps deleted business records recoverable and adjusts live ledgers atomically. */
+import {hasPermission,actionPermission} from './permissions.mjs';
+import {restartReportApproval} from './report-approval.mjs';
+import {syncSupportRecord} from './support-workflow.mjs';
 const list = value => Array.isArray(value) ? value : [];
 const clone = value => structuredClone(value);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const metadata = ['archivedAt','archivedBy','archiveReason','updatedAt','updatedBy'];
 const fields = {
   projects: ['id','name','type','customerId','memberIds','contactIds','location','status','progress','budget','contractAmount','startDate','endDate','description','phases','cover','clientNote','publicVisible','publicTitle','publicSummary','projectCode','projectManagerId','customerCode','dossierCode','dossierTitle','reviewChain'],
-  tasks: ['id','projectId','projectName','title','description','assigneeId','dueDate','status','version','createdAt','updatedAt'],
-  reports: ['id','projectId','workerId','date','start','end','breakMinutes','description','output','status','minutes','createdAt','version','rate','laborCost','reviewNote','reviewedBy','location','photoIds'],
+  tasks: ['id','projectId','projectName','title','description','assigneeId','dueDate','status','version','createdAt','updatedAt','sourceTicketId'],
+  reports: ['id','projectId','workerId','date','start','end','breakMinutes','description','output','status','minutes','createdAt','version','rate','laborCost','reviewNote','reviewedBy','location','photoIds','approval'],
   materials: ['id','projectId','inventoryId','name','quantity','originalQuantity','returnedQuantity','returns','unit','unitPrice','clientVisible','date','recordedBy','createdAt'],
   inventory: ['id','name','unit','quantity','minQuantity','unitPrice'],
   invoices: ['id','projectId','title','amount','paid','dueDate','status'],
   receipts: ['id','invoiceId','projectId','amount','reference','method','recordedBy','createdAt'],
   messages: ['id','projectId','authorId','text','internal','createdAt'],
-  tickets: ['id','projectId','authorId','subject','description','priority','status','replies','createdAt'],
+  tickets: ['id','projectId','authorId','subject','description','priority','status','replies','createdAt','version','taskId','assigneeId','dueDate','approvalStatus','assignmentStatus'],
 };
 const editable = {
   projects: fields.projects.filter(key => !['id','cover','contactIds'].includes(key)),
@@ -26,19 +29,28 @@ const editable = {
   tickets: ['subject','description','priority','status'],
 };
 const select = (row, keys) => Object.fromEntries(keys.filter(key => row?.[key] !== undefined).map(key => [key, clone(row[key])]));
-export function managementSnapshot(state, actor = {}) {
+export function managementSnapshot(state, actor = {},{canReadProject}={}) {
   const result = {};
   for (const collection of Object.keys(fields)) {
+    const canEdit=actionPermission('admin.record.update',{collection}),canArchive=actionPermission('admin.record.archive',{collection});
+    if(!hasPermission(actor,canEdit,state)&&!hasPermission(actor,canArchive,state)){result[collection]=[];continue;}
     const rows = collection === 'tasks' ? list(state.projects).flatMap(project => list(project.tasks).map(task => ({...task,projectId:project.id,projectName:project.name,projectArchivedAt:project.archivedAt}))) : list(state[collection]);
-    result[collection] = rows.map(row => ({...select(row,[...fields[collection],...metadata,'projectArchivedAt']), ...(row.projectId&&state.projects.find(project=>project.id===row.projectId)?.archivedAt?{projectArchivedAt:state.projects.find(project=>project.id===row.projectId).archivedAt}:{}), ...(collection==='projects'?{files:list(row.files).filter(file=>file.status==='ready'&&!file.archivedAt&&(!file.draftId||file.reportId||file.uploadedBy===actor.id)).map(file=>select(file,['id','name','mimeType','size','uploadedBy','createdAt','clientVisible','reportId','updatedAt'])),archivedFiles:list(row.files).filter(file=>file.status==='ready'&&file.archivedAt&&(!file.draftId||file.reportId||file.uploadedBy===actor.id)).map(file=>select(file,['id','name','mimeType','size','uploadedBy','createdAt','clientVisible','reportId','archivedAt','archivedBy','updatedAt']))}:{}), ...(row.adminHistory?.length ? {amendmentCount:row.adminHistory.length} : {})}));
+    result[collection] = rows.filter(row=>{
+      const projectId=collection==='projects'?row.id:row.projectId;
+      if(!projectId)return collection==='inventory';
+      if(typeof canReadProject==='function')return canReadProject(projectId);
+      const project=list(state.projects).find(item=>item.id===projectId);
+      return hasPermission(actor,'projects.view',state)&&project&&(actor.role==='manager'||list(project.memberIds).includes(actor.id)||project.customerId===actor.id||project.projectManagerId===actor.id||list(project.reviewChain).some(stage=>stage.userId===actor.id));
+    }).map(row => ({...select(row,[...fields[collection],...metadata,'projectArchivedAt']), ...(row.projectId&&state.projects.find(project=>project.id===row.projectId)?.archivedAt?{projectArchivedAt:state.projects.find(project=>project.id===row.projectId).archivedAt}:{}), ...(collection==='projects'&&hasPermission(actor,'documents.manage',state)?{files:list(row.files).filter(file=>file.status==='ready'&&!file.archivedAt&&(!file.draftId||file.reportId||file.uploadedBy===actor.id)).map(file=>select(file,['id','name','mimeType','size','uploadedBy','createdAt','clientVisible','reportId','updatedAt'])),archivedFiles:list(row.files).filter(file=>file.status==='ready'&&file.archivedAt&&(!file.draftId||file.reportId||file.uploadedBy===actor.id)).map(file=>select(file,['id','name','mimeType','size','uploadedBy','createdAt','clientVisible','reportId','archivedAt','archivedBy','updatedAt']))}:{}), ...(row.adminHistory?.length ? {amendmentCount:row.adminHistory.length} : {})}));
   }
   return result;
 }
 
-export function applyAdminRecordAction(state, actor, action, payload, {fail, run, historicalRate, reportLocation, reportPhotos}) {
-  if (actor.role !== 'manager') fail('این عملیات فقط برای مدیر مجاز است.',403,'FORBIDDEN');
+export function applyAdminRecordAction(state, actor, action, payload, {fail, run, historicalRate, reportLocation, reportPhotos,canReadProject}) {
   const collection = payload.collection;
   if (!Object.hasOwn(fields,collection)) fail('بخش مدیریت معتبر نیست.');
+  const permission=actionPermission(action,payload);
+  if(!permission||!hasPermission(actor,permission,state))fail('دسترسی ویرایش یا حذف این بخش برای حساب شما فعال نیست.',403,'FORBIDDEN');
   const project = collection === 'tasks' ? list(state.projects).find(row => row.id === payload.projectId) : null;
   const row = (collection === 'tasks' ? list(project?.tasks) : list(state[collection])).find(row => row.id === payload.id);
   if (!row) fail('رکورد یافت نشد.',404,'NOT_FOUND');
@@ -54,10 +66,14 @@ export function applyAdminRecordAction(state, actor, action, payload, {fail, run
   const bool = value => {if(typeof value!=='boolean')fail('مقدار بله یا خیر معتبر نیست.');return value;};
   const choose = (value,values,label) => {if(!values.includes(value))fail(`${label} معتبر نیست.`);return value;};
   const parent = collection === 'projects' ? row : project || (row.projectId ? list(state.projects).find(item=>item.id===row.projectId) : null);
+  const scopeAllowed=target=>typeof canReadProject==='function'?canReadProject(target.id):hasPermission(actor,'projects.view',state)&&(actor.role==='manager'||list(target.memberIds).includes(actor.id)||target.customerId===actor.id||target.projectManagerId===actor.id||list(target.reviewChain).some(stage=>stage.userId===actor.id));
+  if(parent&&!scopeAllowed(parent))fail('این رکورد خارج از پروژه‌های مجاز شماست.',403,'FORBIDDEN');
+  if(collection==='tasks'&&row.sourceTicketId&&action==='admin.record.archive'&&!hasPermission(actor,'support.assign',state))fail('لغو ارجاع پشتیبانی فقط با دسترسی ارجاع تیکت مجاز است.',403,'FORBIDDEN');
   const reason = text(payload.reason,'دلیل تغییر',1000,true);
   const before = select(row,fields[collection]);
   const version = payload.version ?? payload.changes?.version;
   if (version !== undefined && row.version !== version) fail('رکورد هم‌زمان تغییر کرده است؛ آخرین نسخه را باز کنید.',409,'VERSION_CONFLICT');
+  if(payload.expectedUpdatedAt!==undefined&&payload.expectedUpdatedAt!==(row.updatedAt??null))fail('رکورد هم‌زمان تغییر کرده است؛ آخرین نسخه را باز کنید.',409,'VERSION_CONFLICT');
   const archived = Boolean(row.archivedAt);
   const allowParent = collection === 'projects' || !parent?.archivedAt;
   if (!allowParent) fail('ابتدا پروژهٔ حذف‌شده را بازیابی کنید.',409,'PROJECT_ARCHIVED');
@@ -92,6 +108,10 @@ export function applyAdminRecordAction(state, actor, action, payload, {fail, run
     if(!object(payload.changes)||!Object.keys(payload.changes).length)fail('تغییرات معتبر نیست.');
     const changes={...payload.changes};delete changes.version;
     if(Object.keys(changes).some(key=>!editable[collection].includes(key)))fail('یکی از فیلدها در این بخش ویرایش‌پذیر نیست.');
+    const financialKeys=collection==='projects'?['budget','contractAmount']:collection==='inventory'||collection==='materials'?['unitPrice']:['invoices','receipts'].includes(collection)?['amount']:[];
+    if(financialKeys.some(key=>changes[key]!==undefined)&&!hasPermission(actor,collection==='inventory'?'inventory.prices':'projects.prices',state))fail('مجوز مشاهده و ویرایش مبلغ این رکورد فعال نیست.',403,'FORBIDDEN');
+    if(collection==='tasks'&&row.sourceTicketId&&Object.keys(changes).some(key=>key!=='status'))fail('مشخصات و مسئول وظیفهٔ پشتیبانی را از تیکت مربوط ویرایش کنید.',409,'SUPPORT_WORKFLOW_REQUIRED');
+    if(collection==='tickets'&&row.taskId&&changes.status!==undefined)fail('وضعیت تیکت ارجاع‌شده را از گردش پشتیبانی تغییر دهید.',409,'SUPPORT_WORKFLOW_REQUIRED');
     if(collection==='projects')run('project.update',{id:row.id,...changes});
     else if(collection==='tasks'){if(changes.assigneeId===row.assigneeId)delete changes.assigneeId;run('task.update',{projectId:project.id,id:row.id,version:version??row.version,...changes});}
     else if(collection==='reports'){
@@ -100,6 +120,7 @@ export function applyAdminRecordAction(state, actor, action, payload, {fail, run
       const nextWorkerId=changes.workerId??row.workerId;
       const nextProject=list(state.projects).find(project=>project.id===(changes.projectId??row.projectId));
       if(!nextProject||nextProject.archivedAt)fail('پروژهٔ فعال معتبر نیست.');
+      if(!scopeAllowed(nextProject))fail('پروژهٔ مقصد خارج از دسترسی شماست.',403,'FORBIDDEN');
       const worker=list(state.users).find(person=>person.id===nextWorkerId);
       if(!worker)fail('نیروی گزارش یافت نشد.');
       if((nextWorkerId!==row.workerId||nextProject.id!==row.projectId)&&(worker.deletedAt||worker.role!=='worker'||!list(nextProject.memberIds).includes(worker.id)))fail('نیروی تازه باید عضو فعال پروژه باشد.');
@@ -114,6 +135,7 @@ export function applyAdminRecordAction(state, actor, action, payload, {fail, run
       // An administrative amendment is a new live review; the previous signed dossier is never rewritten.
       Object.assign(row,{projectId:nextProject.id,workerId:nextWorkerId,date:nextDate,start,end,breakMinutes,minutes:elapsed-breakMinutes,description:text(changes.description??row.description,'شرح کار'),output:text(changes.output??row.output,'خروجی کار',4000,true),rate,laborCost:0,status:'submitted',version:row.version+1,location,photoIds});
       delete row.reviewNote;delete row.reviewedBy;
+      restartReportApproval(state,row,actor,{previous:before});
     }else if(collection==='materials'){
       if(!reason)fail('برای اصلاح مصرف کالا، دلیل اصلاح را ثبت کنید.');
       if(changes.name!==undefined)row.name=text(changes.name,'نام کالا',160);
@@ -165,6 +187,7 @@ export function applyAdminRecordAction(state, actor, action, payload, {fail, run
   }else fail('عملیات مدیریت شناخته‌شده نیست.',400,'UNKNOWN_ACTION');
   // Delegated actions commit a fresh clone into state: always resolve the current canonical object.
   const current = collection==='tasks' ? state.projects.find(item=>item.id===project.id).tasks.find(item=>item.id===row.id) : state[collection].find(item=>item.id===row.id);
+  if(collection==='tickets'||collection==='tasks')syncSupportRecord(state,actor,collection,current,action.split('.').at(-1),reason);
   current.updatedAt=at;current.updatedBy=actor.id;
   const after=select(current,fields[collection]);
   const changedKeys=[...new Set([...Object.keys(before),...Object.keys(after)])].filter(key=>JSON.stringify(before[key])!==JSON.stringify(after[key]));

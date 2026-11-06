@@ -1,3 +1,4 @@
+import {hasPermission,effectivePermissions,requirePermission,applyPermissionOverrides,canAdministerPerson,redactActionResult} from './permissions.mjs';
 import { applyAction } from './domain.mjs';
 import { applyPersonProfile } from './people-profile.mjs';
 import { normalizePhone, normalizeUsername, loginIdentity, phoneAuthEmail, internalAuthEmail, latinDigits } from './identity.mjs';
@@ -9,7 +10,7 @@ export class APIError extends Error {
   }
 }
 const fail = (message, status = 400, code = 'INVALID_INPUT') => { throw new APIError(message, status, code); };
-export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'deletedAt', 'managementRole', 'managementTitle', 'passwordChangeRequired'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
+export const safeUser = user => user ? Object.fromEntries(['id', 'name', 'email', 'phone', 'username', 'role', 'department', 'skill', 'personnelCode', 'deletedAt', 'managementRole', 'managementTitle', 'passwordChangeRequired','permissions','permissionOverrides'].filter(key => user[key] !== undefined && !(key === 'email' && internalAuthEmail(user[key]))).map(key => [key, user[key]])) : null;
 export function text(value, label, max = 4000) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) fail(`${label} معتبر نیست.`);
   return value.trim();
@@ -55,7 +56,7 @@ export async function authenticate(request, client, repo) {
   if (!user || user.deletedAt || user.role !== profile.role) fail('دسترسی حساب نیازمند بررسی مدیر است.', 403, 'PROFILE_MISMATCH');
   await verifySessionSecurity(repo, user.id, response.data.user.id, match[1]);
   const passwordChangeRequired = (await repo.getSetting?.(`auth-onboarding:${user.id}`))?.required === true;
-  return { user: {...user,...managementRoleDetails(loaded.state,user),passwordChangeRequired}, authUser: response.data.user, state: loaded.state, revision: loaded.revision };
+  return { user: {...user,...managementRoleDetails(loaded.state,user),permissions:effectivePermissions(user,loaded.state),permissionOverrides:structuredClone(user.permissions||{}),passwordChangeRequired}, authUser: response.data.user, state: loaded.state, revision: loaded.revision };
 }
 
 export function emptyState(email) {
@@ -123,7 +124,7 @@ export async function bootstrap(client, repo, payload) {
 }
 
 function accountInState(state, actorId, payload, domainUserId) {
-  manager(state.users.find(user => user.id === actorId));
+  const actor=state.users.find(user => user.id === actorId);manager(actor);requirePermission(actor,'people.manage',state);
   const name = text(payload.name, 'نام', 120);
   const phone = payload.phone ? normalizePhone(payload.phone) : null;
   const email = payload.email ? emailValue(payload.email) : null;
@@ -154,7 +155,10 @@ function accountInState(state, actorId, payload, domainUserId) {
   for (const [key,label,max] of [['department','واحد',100],['skill','تخصص',200]]) {
     if(payload[key]!==undefined){if(typeof payload[key]!=='string'||payload[key].trim().length>max)fail(`${label} معتبر نیست.`);user[key]=payload[key].trim();}
   }
+  if(payload.personDetails?.hourlyRate!==undefined)requirePermission(actor,'projects.prices',state);
+  if(!canAdministerPerson(state,actor,user))fail('نقش حساب از دسترسی فعلی شما بیشتر است.',403,'FORBIDDEN');
   applyPersonProfile(user,payload);
+  if(payload.permissions!==undefined)applyPermissionOverrides(state,actor,user,payload.permissions);
   state.users.push(user);
   for (const project of projects) {
     if (user.role === 'customer') project.customerId = user.id;
@@ -462,6 +466,7 @@ export async function listPasswordResetRequests(repo, actor) {
   manager(actor);
   await rate(repo, `password-reset-list:${actor.id}`, 60);
   const saved = await repo.getSetting(RESET_REQUESTS), loaded = await repo.loadState();
+  requirePermission(loaded?.state?.users?.find(person=>person.id===actor.id),'people.manage',loaded?.state);
   const activeIds = new Set((loaded?.state?.users || []).filter(user => !user.deletedAt).map(user => user.id));
   return { requests: (Array.isArray(saved) ? saved : []).filter(item => item.status === 'pending' && activeIds.has(item.userId)).slice(-100).reverse() };
 }
@@ -474,6 +479,9 @@ export async function resetAccountPassword(client, repo, actor, payload) {
   return withPrivateLock(repo, `account-security:${id}`, async () => {
     const loaded = await repo.loadState(), user = loaded?.state.users.find(user => user.id === id);
     if (!user || user.deletedAt) fail('حساب فعال یافت نشد.', 404, 'NOT_FOUND');
+    const acting=loaded.state.users.find(person=>person.id===actor.id);
+    requirePermission(acting,'people.manage',loaded.state);
+    if(!canAdministerPerson(loaded.state,acting,user))fail('بازنشانی رمز این حساب به دسترسی کامل‌تری نیاز دارد.',403,'FORBIDDEN');
     if (user.role === 'manager') fail('رمز حساب مدیر از این مسیر تغییر نمی‌کند.', 403, 'MANAGER_ROLE_PROTECTED');
     const profile = await repo.getProfileByDomainId(id);
     if (!profile) fail('این پرونده هنوز حساب ورود ندارد؛ ابتدا «فعال‌سازی ورود» را برای همان فرد انجام دهید.', 409, 'ACCOUNT_NEEDS_ACTIVATION');
