@@ -53,7 +53,7 @@ export function persianMonth(iso = todayISO(),offset = 0) {
   return {year,month,start,end:new Date(Date.parse(next) - 86400000).toISOString().slice(0,10),days:Array.from({length:count},(_,index) => new Date(Date.parse(start) + index * 86400000).toISOString().slice(0,10)),offset:(new Date(start + 'T12:00:00Z').getUTCDay() + 1) % 7,label:formatPersianDate(start,{month:'long',year:'numeric',day:undefined})};
 }
 
-function header(page,e) {const [title,subtitle] = modes[page];return `<div class="page-heading"><div><p class="eyebrow">ARIOS WORKSPACE</p><h1>${e(title)}</h1><p class="muted">${e(subtitle)}</p></div>${page === 'customers' ? '<a class="button primary" href="#leads">درخواست‌های مشاوره</a>' : page === 'documents' ? '<a class="button secondary" href="#projects">پروندهٔ پروژه‌ها</a>' : ''}</div>`;}
+function header(page,e) {const [title,subtitle] = modes[page];return `<div class="page-heading"><div><p class="eyebrow">ARIOS WORKSPACE</p><h1>${e(title)}</h1><p class="muted">${e(subtitle)}</p></div>${page === 'documents' ? '<a class="button secondary" href="#projects">پروندهٔ پروژه‌ها</a>' : ''}</div>`;}
 function money(value,ctx) {return `${(ctx.e || escape)((ctx.n || String)(value))} <small>تومان</small>`;}
 function customerHTML(items,ctx) {
   const e = ctx.e || escape,n = ctx.n || String;

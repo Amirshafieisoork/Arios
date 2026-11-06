@@ -3,6 +3,7 @@ import {hasPermission} from './permissions.mjs';
 export const roleLabels = {manager:'مدیر فضای کار',worker:'همکار اجرایی',customer:'مشتری آریوس',warehouse:'انباردار',accountant:'حسابدار'};
 export const assignableRoles = ['worker','customer','warehouse','accountant'];
 const roleOf = user => typeof user === 'string' ? user : user?.role;
+const hiddenPages = new Set(['assistant','leads']);
 export function landingPage(user) {
   const role=roleOf(user),preferred=role==='warehouse'?'inventory':role==='accountant'?'finance':'dashboard';
   if(typeof user==='string'||allowedPortalPage(preferred,user))return preferred;
@@ -18,6 +19,7 @@ function legacyAllowedPortalPage(page, role) {
   return ['manager','worker','customer'].includes(role);
 }
 export function allowedPortalPage(page,user) {
+  if(hiddenPages.has(page))return false;
   if(typeof user==='string')return legacyAllowedPortalPage(page,user);
   const role=roleOf(user),can=key=>hasPermission(user,key),staff=['manager','worker','warehouse','accountant'].includes(role);
   if(!staff&&role!=='customer'||user?.deletedAt)return false;
@@ -52,7 +54,7 @@ function legacyPortalNavigation(role) {
   };
 }
 export function portalNavigation(user) {
-  if(typeof user==='string')return legacyPortalNavigation(user);
+  if(typeof user==='string'){const nav=legacyPortalNavigation(user);return {main:nav.main.filter(([page])=>allowedPortalPage(page,user)),links:nav.links.filter(([page])=>allowedPortalPage(page,user))};}
   const role=roleOf(user),all=legacyPortalNavigation(role==='customer'?'customer':'manager');
   if(role!=='customer'){
     all.main=all.main.map(row=>row[0]==='reports'?[row[0],'گزارش‌ها و وظایف من',row[2]]:row);
