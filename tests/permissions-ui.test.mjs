@@ -84,7 +84,7 @@ test('stock edit preserves undisclosed monetary fields and read-only stock canno
 
 test('read-only delegated finance shows authorized history and export while all mutation entrypoints stay closed',t=>{
   const s=state({'finance.view':true,'finance.manage':false,'projects.prices':true,'inventory.issue':false});
-  s.employeeFinance.entries=[{id:'entry',type:'expense',amount:12000,date:'2026-11-01',note:'هزینه ثبت‌شده'}];
+  s.employeeFinance.entries=[{id:'entry',type:'expense',projectId:'project',amount:12000,date:'2026-11-01',note:'هزینه ثبت‌شده'}];
   const html=renderFinanceWorkspace(s,ctx());
   assert.match(html,/data-finance-workspace/);assert.match(html,/COST:12000/);assert.match(html,/data-finance-export/);
   for(const action of ['advance','payroll','repay','petty','expense','reverse'])assert(!html.includes('data-finance-'+action+'>')&&!new RegExp('data-finance-'+action+'(?:=|\\s)').test(html));
@@ -104,7 +104,7 @@ test('hidden personnel and personal-stock amounts are marked confidential rather
 
 test('financial entry creation and reversal are independent capabilities in the visible controls and modal entrypoints',()=>{
   const s=state({'finance.view':true,'finance.manage':true,'finance.reverse':false,'projects.prices':true,'inventory.issue':false});
-  s.employeeFinance.entries=[{id:'entry',type:'expense',amount:12000,date:'2026-11-01',note:'هزینه ثبت‌شده',version:1}];
+  s.employeeFinance.entries=[{id:'entry',type:'expense',projectId:'project',amount:12000,date:'2026-11-01',note:'هزینه ثبت‌شده',version:1}];
   const html=renderFinanceWorkspace(s,ctx());
   assert.match(html,/data-finance-expense/);assert(!html.includes('data-finance-reverse='));
   let modal;const c=ctx({modal:value=>modal=value});

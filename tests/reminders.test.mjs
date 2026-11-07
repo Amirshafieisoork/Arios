@@ -217,5 +217,5 @@ test('staff Telegram linking does not grant voice or AI privileges to warehouse 
     assert.equal(response.status,200);assert.equal(codes.length,1);assert.equal(codes[0].userId,role);
     await assert.rejects(handleVoice({path:'/api/voice/text',request:new Request('https://arios.test/api/voice/text',{method:'POST',body:'{}'}),repo,user}),error=>error.status===403);
   }
-  await assert.rejects(handleVoice({path:'/api/telegram/link',request:new Request('https://arios.test/api/telegram/link',{method:'POST',body:'{}'}),repo:{},user:{id:'client',role:'customer'}}),error=>error.status===403);
+  await assert.rejects(handleVoice({path:'/api/telegram/link',request:new Request('https://arios.test/api/telegram/link',{method:'POST',body:'{}'}),repo:{loadState:async()=>({state:{users:[{id:'client',role:'customer'}]}})},user:{id:'client',role:'customer'}}),error=>error.status===403);
 });

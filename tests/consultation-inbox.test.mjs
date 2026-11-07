@@ -15,7 +15,7 @@ function mount() {
   return {root:{isConnected:true,querySelector:selector => nodes[selector]},nodes,buttons};
 }
 
-test('consultation inbox and navigation are manager-only, including direct route mounting',() => {
+test('consultation navigation is temporarily hidden while retained inbox components remain manager-only',() => {
   for (const role of ['worker','customer','warehouse','accountant']) {
     assert.equal(allowedPortalPage('leads',role),false,role);
     assert(!portalNavigation(role).main.some(([page]) => page === 'leads'));
@@ -23,8 +23,8 @@ test('consultation inbox and navigation are manager-only, including direct route
     let calls = 0;wireLeads({user:{role}},{},{root:{querySelector(){throw Error('must not mount');}},fetcher:async () => calls++});
     assert.equal(calls,0);
   }
-  assert(allowedPortalPage('leads','manager'));
-  assert(portalNavigation('manager').main.some(([page]) => page === 'leads'));
+  assert.equal(allowedPortalPage('leads','manager'),false);
+  assert(!portalNavigation('manager').main.some(([page]) => page === 'leads'));
 });
 
 test('consultation requests use authenticated same-origin routes and confirm the returned saved status',async () => {

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSeedState, publicState } from '../public/domain.mjs';
 import { portalNotifications, projectWorkers, reportProjects } from '../public/portal-workflows.mjs';
-import { renderOperations, wireOperations } from '../public/operations.mjs';
+import { renderOperations, wireOperations, renderAssistant, wireAssistant } from '../public/operations.mjs';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const context = extra => ({ e: escape, n: String, money: String, date: String, icon: value => `<i>${escape(value)}</i>`, badge: String, personName: String, projectName: String, api: { isStatic: false }, capabilities: { ai: true, supabaseAuth: true }, authMode: 'supabase', refresh: async () => {}, ...extra });
@@ -44,7 +44,7 @@ test('follow-up center respects project scope, internal messages and worker fina
 
 test('every operational navigation page has a working data view and role-specific access', () => {
   const seed = createSeedState(), manager = publicState(seed, 'manager');
-  for (const page of ['reports', 'finance', 'inventory', 'support', 'assistant', 'team', 'analytics', 'settings', 'notifications']) {
+  for (const page of ['reports', 'finance', 'inventory', 'support', 'team', 'analytics', 'settings', 'notifications']) {
     const html = renderOperations(page, manager, context());
     assert.equal(typeof html, 'string', page);
     assert(!/TODO|به‌زودی|ساخته نشده/.test(html), page);
@@ -53,18 +53,23 @@ test('every operational navigation page has a working data view and role-specifi
   for (const page of ['inventory', 'team', 'analytics']) {
     assert.match(renderOperations(page, publicState(seed, 'customer'), context()), /این بخش برای نقش شما در دسترس نیست/);
   }
+  for(const role of ['manager','worker','customer']){
+    const html=renderOperations('assistant',publicState(seed,role),context());
+    assert.match(html,/این بخش برای نقش شما در دسترس نیست/);
+    assert(!html.includes('data-ai-form'));
+  }
 });
 
 test('general assistant works before any project exists and unavailable service has a real settings path', () => {
   const state = publicState(createSeedState(), 'manager');
   state.user.id = 'empty-general-assistant'; state.projects = [];
-  const html = renderOperations('assistant', state, context());
+  const html = renderAssistant(state, context());
   assert.match(html, /گفت‌وگوی عمومی آریوس/);
   assert.match(html, /<textarea[^>]*maxlength="4000"[^>]*>/);
   assert(!/<textarea[^>]*disabled/.test(html));
   assert(!/<button[^>]*type="submit"[^>]*disabled/.test(html));
   assert(!html.includes('data-ai-escalate'));
-  const offline = renderOperations('assistant', state, context({ capabilities: { ai: false } }));
+  const offline = renderAssistant(state, context({ capabilities: { ai: false } }));
   assert.match(offline, /href="#voice"/);
   assert.match(offline, /type="submit" disabled/);
 });
@@ -77,10 +82,10 @@ test('assistant retry preserves failed input without adding it twice to provider
   const mount = { dataset: { assistantUser: state.user.id, assistantProject: '' } };
   useDocument(t, { querySelector: selector => ({ '[data-ai-form]': form, '[data-assistant-user]': mount }[selector] || null), querySelectorAll: () => [] });
   const ctx = context({ api: { isStatic: false, assistant: async payload => { requests.push(payload); if (requests.length === 1) throw Error('سرویس موقتاً در دسترس نیست'); return { answer: 'گزارش را از بخش گزارش‌های کار ثبت کنید', live: true, sources: [] }; } }, toast() {} });
-  renderOperations('assistant', state, ctx);
-  wireOperations('assistant', state, ctx);
+  renderAssistant(state, ctx);
+  wireAssistant(state, ctx);
   await events.submit({ preventDefault() {} });
-  const failed = renderOperations('assistant', state, ctx);
+  const failed = renderAssistant(state, ctx);
   assert.match(failed, /role="alert"/);
   assert.match(failed, /متن پیام حفظ شده است/);
   assert(failed.includes(textarea.value));
@@ -89,7 +94,7 @@ test('assistant retry preserves failed input without adding it twice to provider
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[1].history, []);
   assert(!Object.hasOwn(requests[1], 'projectId'));
-  const success = renderOperations('assistant', state, ctx);
+  const success = renderAssistant(state, ctx);
   assert.equal((success.match(/class="chat-bubble user"/g) || []).length, 1);
   assert.equal((success.match(/class="chat-bubble assistant"/g) || []).length, 1);
   assert(!success.includes('role="alert"'));

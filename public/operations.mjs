@@ -105,7 +105,7 @@ function conversation(state) {
   if (!m.conversations.has(m.projectId)) m.conversations.set(m.projectId, { messages: [], pending: false, ticketId: '', draft: '', error: '' });
   return { m, chat: m.conversations.get(m.projectId) };
 }
-function renderAssistant(state, ctx) {
+export function renderAssistant(state, ctx) {
   const { m, chat } = conversation(state);
   const live = Boolean(ctx.capabilities?.ai) && !ctx.api.isStatic;
   const project = state.projects.find(p => p.id === m.projectId);
@@ -214,7 +214,7 @@ function isCurrentAssistant(userId, projectId) {
   const mount=document.querySelector('[data-assistant-user]');
   return mount?.dataset.assistantUser === userId && mount.dataset.assistantProject === projectId;
 }
-function wireAssistant(state,ctx) {
+export function wireAssistant(state,ctx) {
   const {m,chat}=conversation(state);
   const selector=document.querySelector('[data-ai-project]');
   selector?.addEventListener('change',()=>{ m.projectId=selector.value; ctx.refresh(); });

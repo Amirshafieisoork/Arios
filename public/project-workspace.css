@@ -7,3 +7,5 @@
 
 .voice-reminder-status .muted,.reminder-deliveries{font-size:14px;line-height:2}.reminder-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-block:14px}.reminder-summary>span{background:#f5f3ed;border-radius:8px;padding:9px;font-size:14px}.reminder-summary b{margin-inline-start:6px}.reminder-deliveries{margin-top:14px}.reminder-deliveries summary{cursor:pointer;color:var(--gold-dark,#967343)}.voice-reminder-status .actions{flex-wrap:wrap}.voice-reminder-status h2{font-size:22px}
 .project-file-card{min-width:0;border:1px solid #e3e7e5;border-radius:12px;overflow:hidden;background:#fff}.project-file-card>.project-file{width:100%;border:0;border-radius:0}.project-file-controls{padding:10px;flex-wrap:wrap;border-top:1px solid #e3e7e5}.project-file-archive{margin-top:24px}.project-file-archive>summary{cursor:pointer;font-weight:700;padding-block:10px}
+
+.report-hourly-duration{margin:0;padding:12px 14px;border:1px solid var(--line,#dfe5e2);border-radius:10px;background:#f7f9f6;font-size:16px;line-height:1.9;color:var(--text,#21373a)}

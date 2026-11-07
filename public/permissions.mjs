@@ -84,7 +84,7 @@ export function actionPermission(action,payload={}){
 }
 export function assertActionPermission(user,action,payload,state){const key=actionPermission(action,payload);if(key)requirePermission(user,key,state);}
 
-const monetaryKeys=new Set(['budget','contractAmount','laborCost','rate','hourlyRate','rateHistory','unitPrice','unitRate','amount','paid','total','wage','bonus','declaredWage','agreedWage','totalWages','totalMaterials','totalLabor','totalAmount','netAmount','balance','outstanding','cost','costs','totalCost','grandTotal','paymentAmount','settledAmount','advanceDeduction']);
+const monetaryKeys=new Set(['budget','contractAmount','laborCost','rate','hourlyRate','rateHistory','unitPrice','unitRate','amount','paid','total','wage','bonus','declaredWage','agreedWage','totalWages','totalMaterials','totalLabor','totalAmount','netAmount','balance','outstanding','cost','costs','totalCost','grandTotal','paymentAmount','settledAmount','advanceDeduction','approvedAllowances','earnedTotal']);
 const moneyKey=key=>!/quantity$/i.test(key)&&(monetaryKeys.has(key)||/(?:price|amount|wage|payroll|payable|receivable|salary|deduction|balance|cost|cashflow|cashin|cashout|invoiced|received|issued|spent|returned|repaid|settled|recoveries|expenses)/i.test(key));
 export function omitMoney(value){
  if(Array.isArray(value))return value.map(omitMoney);

@@ -6,3 +6,7 @@
 @media(max-width:550px){.dossier-review-inbox .card-head{display:grid;gap:10px}.dossier-inbox-item{display:grid;gap:5px}.report-project-meta{display:grid;gap:2px}}
 
 .project-dossier-rename{display:inline-block;border:0;background:none;padding:3px 0;margin-top:3px;font:inherit;font-size:14px;cursor:pointer;color:var(--gold-dark,#80623b);text-decoration:underline;text-underline-offset:3px}
+
+/* Project identifiers are readable business references, including on phones. */
+.project-card .cover-code,.project-banner-copy .eyebrow bdi,.project-identification bdi,.report-project-meta bdi,.project-code-summary bdi{font-size:18px;font-weight:700;line-height:1.8;font-variant-numeric:tabular-nums;letter-spacing:.015em;white-space:normal;overflow-wrap:anywhere;max-width:100%}
+.project-card .cover-code{padding:7px 11px}.project-banner-copy .eyebrow bdi{display:inline-block;vertical-align:middle}.project-identification bdi{display:inline-block;direction:ltr;unicode-bidi:isolate}

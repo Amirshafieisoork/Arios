@@ -92,7 +92,7 @@ test('Groq failures preserve the selected host and never fall back to another pa
 
 function settingsFixture() {
   let saved={aiBaseUrl:'https://api.openai.com/v1',aiApiKey:OPENAI_KEY,aiModel:'gpt-4o-mini',transcriptionModel:'whisper-1',telegramBotToken:'existing-private-bot-token',botUsername:'ExistingBot',botId:'1'};
-  const repo={getSetting:async()=>structuredClone(saved),setSetting:async (key,value)=>{assert.equal(key,'integrations');saved=structuredClone(value);},rateLimit:async()=>({allowed:true})};
+  const repo={loadState:async()=>({state:{users:[{id:'manager',role:'manager'}]}}),getSetting:async()=>structuredClone(saved),setSetting:async (key,value)=>{assert.equal(key,'integrations');saved=structuredClone(value);},rateLimit:async()=>({allowed:true})};
   const save=async payload=>handleVoice({path:'/api/integrations',request:new Request('https://arios.example/api/integrations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),repo,user:{id:'manager',role:'manager'},supabase:{},fetcher:()=>assert.fail('Saving provider settings must not make an upstream request')});
   return {repo,save,read:()=>structuredClone(saved)};
 }

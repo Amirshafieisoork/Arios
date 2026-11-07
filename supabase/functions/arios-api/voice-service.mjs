@@ -1,5 +1,6 @@
 import { applyAction, publicState, projectAccess, DomainError } from './domain.mjs';
 import { transcribeAudio, extractReport, fetchTelegramUpdates, downloadTelegramVoice, MAX_AUDIO_BYTES } from './voice-core.mjs';
+import {hasPermission} from './permissions.mjs';
 
 const BUCKET = 'arios-audio';
 const AUDIO_RETENTION_MS = 7 * 86400000;
@@ -13,7 +14,8 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), { stat
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, label, max = 4000) => { if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) fail(`${label} معتبر نیست.`); return value.trim(); };
 const manager = user => { if (user?.role !== 'manager') fail('این عملیات فقط برای مدیر مجاز است.', 403, 'FORBIDDEN'); };
-const canVoice = user => { if (!user || user.deletedAt || !['manager', 'worker'].includes(user.role)) fail('دسترسی گزارش صوتی مجاز نیست.', 403, 'FORBIDDEN'); };
+const canVoice = (user,state) => { if (!user || user.deletedAt || !['manager','worker','warehouse','accountant'].includes(user.role)||!hasPermission(user,'voice.use',state)&&!hasPermission(user,'voice.manage',state)) fail('دسترسی گزارش صوتی مجاز نیست.', 403, 'FORBIDDEN'); };
+const canManageVoice=(user,state)=>user?.role==='manager'&&hasPermission(user,'voice.manage',state);
 const tehranDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))).map(value => value.toString(16).padStart(2, '0')).join('');
 const parseObject = value => { if (object(value)) return value; try { const parsed = JSON.parse(value || '{}'); return object(parsed) ? parsed : {}; } catch { return {}; } };
@@ -95,10 +97,10 @@ async function telegramIdentity(config, method, fetcher) {
   } finally { clearTimeout(timer); controller.abort(); }
 }
 
-async function draftFor(repo, id, user) {
+async function draftFor(repo, id, user, state) {
   const row = await repo.getDraft(text(id, 'شناسه پیش‌نویس', 120));
   if (!row) fail('پیش‌نویس یافت نشد.', 404, 'NOT_FOUND');
-  if (user.role !== 'manager' && row.user_id !== user.id) fail('به این پیش‌نویس دسترسی ندارید.', 403, 'FORBIDDEN');
+  if (!canManageVoice(user,state) && row.user_id !== user.id) fail('به این پیش‌نویس دسترسی ندارید.', 403, 'FORBIDDEN');
   return row;
 }
 
@@ -215,9 +217,9 @@ export async function processDraft({ repo, supabase, id, fetcher = fetch, env = 
     if (!config.aiApiKey || !config.aiModel) fail('اتصال اختصاصی هوش مصنوعی آریوس را در تنظیمات گزارش صوتی کامل کنید.', 503, 'AI_NOT_CONFIGURED');
     const { state } = await repo.loadState();
     const user = state.users.find(user => user.id === row.user_id);
-    canVoice(user);
+    canVoice(user,state);
     const snapshot = publicState(state, user.id);
-    const projects = snapshot.projects.filter(project => user.role === 'manager' || project.memberIds.includes(user.id)).map(({ id, name }) => ({ id, name }));
+    const projects = snapshot.projects.filter(project => projectAccess(state,user.id,project.id)).map(({ id, name }) => ({ id, name }));
     let transcript = row.transcript || '';
     if (!transcript) {
       await checkpoint('audio');
@@ -322,25 +324,28 @@ export async function syncTelegram({ repo, supabase, fetcher = fetch, env = {} }
 }
 
 /** Called only after Edge authentication and origin checks; no unauthenticated sync bypass. */
-export async function handleVoice({ path, request, supabase, repo, user, fetcher = fetch, env = {} }) {
+export async function handleVoice({ path, request, supabase, repo, user, state:initialState, fetcher = fetch, env = {} }) {
   const paths = new Set(['/api/voice', '/api/integrations', '/api/telegram/link', '/api/telegram/unlink', '/api/telegram/sync', '/api/voice/text', '/api/voice/retry', '/api/voice/submit', '/api/voice/upload-url', '/api/voice/upload-complete', '/api/voice/audio']);
   if (!paths.has(path)) return null;
+  const currentState=initialState||(await repo.loadState())?.state;
+  user=currentState?.users?.find(person=>person.id===user?.id);
   if(['/api/telegram/link','/api/telegram/unlink'].includes(path)) {
     if(!user||user.deletedAt||!['manager','worker','warehouse','accountant'].includes(user.role))fail('اتصال تلگرام فقط برای همکار فعال مجاز است.',403,'FORBIDDEN');
-  } else canVoice(user);
+  } else canVoice(user,currentState);
+  const manageVoice=canManageVoice(user,currentState);
   if (path === '/api/voice' && request.method === 'GET') {
-    if (user.role === 'manager') await cleanupAudio(repo, supabase);
+    if (manageVoice) await cleanupAudio(repo, supabase);
     const config = await getConfig(repo, env);
-    const rows = await repo.listDrafts(user.role === 'manager' ? null : user.id, 100);
-    const links = await repo.listTelegramLinks(user.role === 'manager' ? null : user.id);
+    const rows = await repo.listDrafts(manageVoice ? null : user.id, 100);
+    const links = await repo.listTelegramLinks(manageVoice ? null : user.id);
     const { state } = await repo.loadState();
-    return json({ drafts: rows.map(draftView), integration: safeConfig(config), telegram: { configured: Boolean(config.telegramBotToken), botUsername: config.botUsername, linked: links.some(link => link.user_id === user.id), ...(user.role === 'manager' ? { links: links.map(link => ({ telegramUserId: link.telegram_user_id, userId: link.user_id, name: state.users.find(user => user.id === link.user_id)?.name || 'عضو تیم' })) } : {}) } });
+    return json({ drafts: rows.map(draftView), integration: safeConfig(config), telegram: { configured: Boolean(config.telegramBotToken), botUsername: config.botUsername, linked: links.some(link => link.user_id === user.id), ...(manageVoice ? { links: links.map(link => ({ telegramUserId: link.telegram_user_id, userId: link.user_id, name: state.users.find(user => user.id === link.user_id)?.name || 'عضو تیم' })) } : {}) } });
   }
   if (request.method !== 'POST') return json({ error: 'روش درخواست مجاز نیست.', code: 'METHOD_NOT_ALLOWED' }, 405);
   const payload = await readJSON(request);
   if (path === '/api/voice/audio') {
     await rate(repo, `voice-audio:${user.id}`, 30);
-    let row = await draftFor(repo, payload.id, user);
+    let row = await draftFor(repo, payload.id, user, currentState);
     retainedAudio(row);
     if (row.source === 'telegram' && !row.storage_path) row = (await cacheTelegramAudio({ repo, supabase, row, config: await getConfig(repo, env), fetcher })).row;
     const { bucket, path: audioPath, metadata } = await audioInfo(supabase, row);
@@ -426,7 +431,7 @@ export async function handleVoice({ path, request, supabase, repo, user, fetcher
     return json({ draftId: id, uploadUrl: data.signedUrl, token: data.token, path: data.path || storagePath });
   }
   if (path === '/api/voice/upload-complete') {
-    const row = await draftFor(repo, payload.id, user);
+    const row = await draftFor(repo, payload.id, user, currentState);
     if (row.source !== 'upload') fail('این پیش‌نویس از بارگذاری فایل ساخته نشده است.', 400, 'INVALID_UPLOAD');
     if (['ready', 'submitted', 'processing'].includes(row.status)) return json(draftView(row));
     // Metadata and bytes are verified inside the claimed processing job, so a failed finalize stays retryable.
@@ -434,18 +439,18 @@ export async function handleVoice({ path, request, supabase, repo, user, fetcher
   }
   if (path === '/api/voice/retry') {
     await rate(repo, `voice:${user.id}`, 10);
-    const row = await draftFor(repo, payload.id, user);
+    const row = await draftFor(repo, payload.id, user, currentState);
     if (row.status === 'submitted') fail('این پیش‌نویس قبلاً ارسال شده است.', 409, 'ALREADY_SUBMITTED');
     return json(await processDraft({ repo, supabase, id: row.id, fetcher, env }));
   }
   if (path === '/api/voice/submit') {
-    const row = await draftFor(repo, payload.id, user);
+    const row = await draftFor(repo, payload.id, user, currentState);
     if (!['ready', 'submitted'].includes(row.status)) fail('ابتدا پردازش پیش‌نویس را کامل کنید.', 409, 'DRAFT_NOT_READY');
     if (!object(payload.fields)) fail('جزئیات گزارش معتبر نیست.');
     const saved = await repo.mutateState(state => {
       const existing = state.reports.find(report => report.sourceDraftId === row.id);
       if (existing) return { id: existing.id, canonicalFields: Object.fromEntries(['projectId', 'workerId', 'date', 'start', 'end', 'breakMinutes', 'description', 'output'].map(key => [key, existing[key]])) };
-      const owner = state.users.find(owner => owner.id === row.user_id); canVoice(owner);
+      const owner = state.users.find(owner => owner.id === row.user_id); canVoice(owner,state);
       const fields = Object.fromEntries(['projectId', 'workerId', 'date', 'start', 'end', 'breakMinutes', 'description', 'output'].filter(key => payload.fields[key] !== undefined).map(key => [key, payload.fields[key]]));
       if (owner.role === 'worker') {
         if (fields.workerId && fields.workerId !== owner.id) fail('گزارش به نام فرستندهٔ ویس ثبت می‌شود.', 403, 'FORBIDDEN');

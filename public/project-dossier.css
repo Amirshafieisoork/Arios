@@ -3,3 +3,5 @@
 @media(max-width:600px){.dossier-document{padding:18px}.dossier-toolbar h2{font-size:22px}.dossier-toolbar .actions{display:grid;grid-template-columns:1fr}.dossier-toolbar .actions>*{width:100%;justify-content:center}.dossier-filter{grid-template-columns:1fr}.dossier-heading{gap:10px;flex-wrap:wrap}.dossier-heading h2{font-size:22px}.dossier-identification{gap:18px 12px}.dossier-stage-list{grid-template-columns:1fr}.dossier-finance-totals{grid-template-columns:1fr}.dossier-section-title h3{font-size:18px}.dossier-review-actions{display:grid;grid-template-columns:1fr}.dossier-work-entry{padding:14px}.dossier-entry-heading{gap:8px 12px}.dossier-editor-row .form-grid{grid-template-columns:1fr}}
 
 .dossier-completion{padding:16px;border:1px dashed var(--line);border-radius:12px;margin-top:18px;font-size:14px}.dossier-loading{padding:28px;text-align:center}.dossier-loading p{color:var(--muted);font-size:14px;line-height:1.9}
+
+.dossier-identification bdi{font-size:18px;line-height:1.8;font-weight:700;font-variant-numeric:tabular-nums;display:inline-block;direction:ltr;unicode-bidi:isolate;max-width:100%;overflow-wrap:anywhere}
