@@ -18,7 +18,7 @@
     { "source": "/login/team", "destination": "/login.html" },
     { "source": "/setup", "destination": "/setup.html" }
   ],
-  "headers": [{ "source": "/downloads/arios-android.apk", "headers": [
+  "headers": [{"source":"/downloads/arios-company-transfer.zip","headers":[{"key":"Content-Type","value":"application/zip"},{"key":"Content-Disposition","value":"attachment; filename=arios-company-transfer.zip"},{"key":"Cache-Control","value":"public, max-age=0, must-revalidate"}]}, { "source": "/downloads/arios-android.apk", "headers": [
     { "key": "Content-Type", "value": "application/vnd.android.package-archive" },
     { "key": "Content-Disposition", "value": "attachment; filename=arios-android.apk" },
     { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
