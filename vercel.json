@@ -3,6 +3,7 @@
   "outputDirectory": "dist-site",
   "installCommand": "npm ci",
   "framework": null,
+  "regions": ["fra1"],
   "functions": { "api/index.mjs": { "maxDuration": 180 } },
   "redirects": [
     {
